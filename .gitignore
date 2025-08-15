@@ -31,6 +31,8 @@
 
 # Packages
 /Packages/*
+!Packages/manifest.json
+!/Packages/packages-lock.json
 
 # Local settings
 /ProjectSettings/ProjectSettings.asset
