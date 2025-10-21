@@ -6,8 +6,7 @@
 /[Bb]uilds/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
-/API/*
-/CloudFunctions/*
+/Creative/*
 
 # Visual Studio / Rider
 .vs/
@@ -63,3 +62,10 @@ Desktop.ini
 
 # Crash reports
 /CrashReports/
+#
+# Large binary assets (Firebase native libraries & archives)
+Assets/Plugins/iOS/Firebase/*.a
+Assets/Plugins/tvOS/Firebase/*.a
+Assets/Firebase/Plugins/**/*.bundle
+Assets/Firebase/Plugins/**/*.so
+Assets/Firebase/m2repository/**/*.srcaar
