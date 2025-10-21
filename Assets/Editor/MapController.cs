@@ -13,6 +13,7 @@ using Firebase;
 using Firebase.Firestore;
 using Firebase.Extensions;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Auth;
 using DB;
 
@@ -243,8 +244,37 @@ public class Map {
                 }
             }
         }
-        if (mapData != null && mapData.Tiles != null) {
-            foreach (_Tile tile in mapData.Tiles) {
+        var tilesToApply = new List<_Tile>();
+        if (mapData != null)
+        {
+            if (mapData.Tiles != null && mapData.Tiles.Count > 0)
+            {
+                tilesToApply.AddRange(mapData.Tiles);
+            }
+            else if (mapData.ChunkIds != null && mapData.ChunkIds.Count > 0)
+            {
+                var mapDataRef = DB.Default.MapData.Document(Id);
+                var chunkCollection = mapDataRef.Collection("Chunks");
+                var chunkTasks = new List<Task<DocumentSnapshot>>();
+                foreach (var chunkId in mapData.ChunkIds)
+                {
+                    chunkTasks.Add(chunkCollection.Document(chunkId).GetSnapshotAsync());
+                }
+
+                var chunkSnapshots = await Task.WhenAll(chunkTasks);
+                foreach (var chunkSnapshot in chunkSnapshots)
+                {
+                    if (!chunkSnapshot.Exists) continue;
+                    var chunk = chunkSnapshot.ConvertTo<MapChunk>();
+                    if (chunk?.Tiles != null)
+                    {
+                        tilesToApply.AddRange(chunk.Tiles);
+                    }
+                }
+            }
+        }
+
+        foreach (_Tile tile in tilesToApply) {
                 Tile ClearedGroundTile = Resources.Load<Tile>(tile.TileName);
                 if (ClearedGroundTile == null) {
                     RuleTile ClearedGroundRuleTile = Resources.Load<RuleTile>(tile.TileName);
@@ -257,7 +287,6 @@ public class Map {
                     ClearedGroundTilemap.SetTile(new Vector3Int(tile.x,tile.y,0), ClearedGroundTile);
                 }
             }
-        }
         PlanetSurfaceTilemap.RefreshAllTiles();
 
 
@@ -273,6 +302,12 @@ public class Map {
         DocumentReference docref = DB.Default.maps.Document(Id);
         DocumentReference MapDataRef = DB.Default.MapData.Document(Id);
         await docref.DeleteAsync();
+        var chunkCollection = MapDataRef.Collection("Chunks");
+        var existingChunks = await chunkCollection.GetSnapshotAsync();
+        foreach (var chunk in existingChunks.Documents)
+        {
+            await chunk.Reference.DeleteAsync();
+        }
         await MapDataRef.DeleteAsync();
     }
     public async void SaveMap () {
@@ -292,35 +327,71 @@ public class Map {
         GameObject ClearedGroundObject = GameObject.Find("ClearedGround");
         Tilemap ClearedGroundTilemap = ClearedGroundObject.GetComponent<Tilemap>();
 
-        DocumentSnapshot MapDataSnapshot = await DB.Default.MapData.Document(Id).GetSnapshotAsync();
-        MapData mapData = new MapData();
-        mapData.Tiles = new List<_Tile>();
-        
+        var mapDataDoc = await DB.Default.MapData.Document(Id).GetSnapshotAsync();
+        MapData existingData = null;
+        if (mapDataDoc.Exists)
+        {
+            existingData = mapDataDoc.ConvertTo<MapData>();
+        }
+
+        var chunkSize = existingData != null && existingData.ChunkSize > 0
+            ? existingData.ChunkSize
+            : MapData.DefaultChunkSize;
+
+        var chunks = new Dictionary<Vector2Int, List<_Tile>>();
+        int totalTiles = 0;
+
         for (int i = 0; i < PlanetSize; i++) {
                 for (int y = 0; y < PlanetSize; y++ ) {
                     if (ClearedGroundTilemap.HasTile(new Vector3Int(y,i,0))) {
                         TileBase clearedGroundTilebase = ClearedGroundTilemap.GetTile(new Vector3Int(y,i,0));
-                        // TileData tiledata = clearedGroundTilebase.GetTileData(new Vector3Int(tile.x,tile.y,0), );
                         _Tile tile = new _Tile();
                         tile.TileName = "MapPallet/" + clearedGroundTilebase.name;
                         tile.x = y;
                         tile.y = i;
-                        tile.Id = DB.Default.GenerateId(15);
-                        mapData.Tiles.Add(tile);
+                        totalTiles++;
+
+                        var chunkCoord = new Vector2Int(tile.x / chunkSize, tile.y / chunkSize);
+                        if (!chunks.TryGetValue(chunkCoord, out var chunkTiles))
+                        {
+                            chunkTiles = new List<_Tile>();
+                            chunks.Add(chunkCoord, chunkTiles);
+                        }
+                        chunkTiles.Add(tile);
                     }
                 }
         }
         
         DocumentReference docref = DB.Default.maps.Document(Id);
         DocumentReference MapDataRef = DB.Default.MapData.Document(Id);
+        var chunkCollection = MapDataRef.Collection("Chunks");
+
+        var existingChunks = await chunkCollection.GetSnapshotAsync();
+        foreach (var chunk in existingChunks.Documents)
+        {
+            await chunk.Reference.DeleteAsync();
+        }
+
+        var chunkIds = new List<string>();
+        foreach (var kvp in chunks)
+        {
+            var chunkId = $"{kvp.Key.x}_{kvp.Key.y}";
+            chunkIds.Add(chunkId);
+            await chunkCollection.Document(chunkId).SetAsync(new MapChunk { Tiles = kvp.Value });
+        }
+        chunkIds.Sort();
+
+        var mapData = existingData ?? new MapData();
+        mapData.ChunkSize = chunkSize;
+        mapData.ChunkIds = chunkIds;
+        mapData.TileCount = totalTiles;
+
         await docref.SetAsync(this);
         await MapDataRef.SetAsync(mapData);
 
     }
     public async void createMap(string MapNameText, int TilesWideInput) {
         try {
-            MapData mapData = new MapData();
-            mapData.Tiles = new List<_Tile>();
             Id = DB.Default.GenerateId(15);
             PlanetName = MapNameText;
             PlanetSize = TilesWideInput;
@@ -328,6 +399,12 @@ public class Map {
             
             DocumentReference docref = DB.Default.maps.Document(Id);
             DocumentReference MapDataRef = DB.Default.MapData.Document(Id);
+            var mapData = new MapData
+            {
+                ChunkSize = MapData.DefaultChunkSize,
+                ChunkIds = new List<string>(),
+                TileCount = 0
+            };
             await docref.SetAsync(this);
             await MapDataRef.SetAsync(mapData);
         } catch (FirebaseException e) {
@@ -338,9 +415,28 @@ public class Map {
 }
 
 [FirestoreData]
-public class MapData {
+public class MapData
+{
+    public const int DefaultChunkSize = 32;
+
     [FirestoreProperty]
-        public List<_Tile> Tiles { get; set; }
+    public List<_Tile> Tiles { get; set; }
+
+    [FirestoreProperty]
+    public List<string> ChunkIds { get; set; } = new List<string>();
+
+    [FirestoreProperty]
+    public int ChunkSize { get; set; } = DefaultChunkSize;
+
+    [FirestoreProperty]
+    public int TileCount { get; set; }
+}
+
+[FirestoreData]
+public class MapChunk
+{
+    [FirestoreProperty]
+    public List<_Tile> Tiles { get; set; }
 }
 
 [FirestoreData]

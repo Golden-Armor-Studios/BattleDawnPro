@@ -36,6 +36,8 @@ public class UI: EditorWindow
     private static ScrollView ResearchsScrollView;
     private static Foldout MapsFoldout;
     private static ScrollView MapsScrollView;
+    private static Foldout MapPaletteFoldout;
+    private static CreateGrassAndWaterTiles.GeneratorState mapPaletteGeneratorState = new CreateGrassAndWaterTiles.GeneratorState();
     private static List<Foldout> foldouts = new List<Foldout>();
     private static Dictionary<Research.ResearchTypeEnum, bool> researchTypeFoldoutState = new Dictionary<Research.ResearchTypeEnum, bool>();
     private static Dictionary<string, bool> researchFoldoutState = new Dictionary<string, bool>();
@@ -237,6 +239,10 @@ public class UI: EditorWindow
             }
         };
         MapsFoldout.Add(MapsScrollView);
+
+        MapPaletteFoldout = new Foldout { text = "Map Pallet" };
+        ViElement.Add(MapPaletteFoldout);
+        MapPaletteFoldout.Add(CreateGrassAndWaterTiles.CreateGeneratorUI(mapPaletteGeneratorState));
 
         TryRequestGameConfigData();
 
