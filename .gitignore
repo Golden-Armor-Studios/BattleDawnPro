@@ -69,3 +69,8 @@ Assets/Plugins/tvOS/Firebase/*.a
 Assets/Firebase/Plugins/**/*.bundle
 Assets/Firebase/Plugins/**/*.so
 Assets/Firebase/m2repository/**/*.srcaar
+
+Assets/Firebase/**/*.bundle
+Assets/Firebase/**/*.so
+Assets/Firebase/**/*.a
+Assets/Firebase/**/*.srcaar
