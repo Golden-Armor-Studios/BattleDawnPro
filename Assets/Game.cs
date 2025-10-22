@@ -279,12 +279,16 @@ namespace Game {
         public int seconds{ get; set; } = 0;
     }
 
+    [Serializable]
     [FirestoreData]
     public class Profile {
         [FirestoreProperty]
         public ResearchLevels ResearchLevels{ get; set; } = new ResearchLevels();
+        [FirestoreProperty]
+        public CurrentResearch CurrentResearch{ get; set; } = new CurrentResearch();
     }
 
+    [Serializable]
     [FirestoreData]
     public class ResearchLevels {
         [FirestoreProperty]
@@ -295,5 +299,22 @@ namespace Game {
         public int Military{ get; set; } = 1;
         [FirestoreProperty]
         public int Comander{ get; set; } = 1;
+    }
+
+    [Serializable]
+    [FirestoreData]
+    public class CurrentResearch {
+        [FirestoreProperty]
+        public int IsResearching { get; set; } = 0;
+        [FirestoreProperty]
+        public int ResearchesAtATime { get; set; } = 1;
+        [FirestoreProperty]
+        public List<Buff> CurrentResearches { get; set; } = new List<Buff>();
+        [FirestoreProperty]
+        public string CurrentResearchStarted { get; set; } = string.Empty;
+        [FirestoreProperty]
+        public string CurrentResearchFinished { get; set; } = string.Empty;
+        [FirestoreProperty]
+        public Research Research { get; set; } = new Research();
     }
 }

@@ -1,6 +1,6 @@
-# BattleDon – Editor Operations Toolkit
+# BattleDawnPro – Editor Operations Toolkit
 
-BattleDon’s Unity editor tooling centralises live-game configuration so designers can stay in sync with Firestore without leaving the editor. This plug-in bundles research/buff/attribute management, Firestore migrations, GitHub-based authentication, and the new Maps workflow in one place.
+BattleDawnPro’s Unity editor tooling centralises live-game configuration so designers can stay in sync with Firestore without leaving the editor. This plug-in bundles research/buff/attribute management, Firestore migrations, GitHub-based authentication, and the new Maps workflow in one place.
 
 
 ## Features
@@ -122,4 +122,4 @@ After logging in:
 3. Validate Firestore interactions against a staging environment whenever possible.  
 4. Open a PR with a concise summary, screenshots (if UI changes), and testing notes.
 
-Thanks for building BattleDon with us! Together we keep the live ops pipeline tight, safe, and fast. If you have questions, ping the team in Discord or reach out via the developer portal.
+Thanks for building BattleDawnPro with us! Together we keep the live ops pipeline tight, safe, and fast. If you have questions, ping the team in Discord or reach out via the developer portal.

@@ -1,0 +1,35 @@
+{
+    "folders": [
+        {
+            "name": "BattleDawnPro",
+            "path": "."
+        }
+    ],
+    "settings": {
+        "dotnet.defaultSolution": "BattleDawnPro.sln",
+        "files.exclude": {
+            "Library": true,
+            "Logs": true,
+            "Obj": true,
+            "Temp": true,
+            "UserSettings": true,
+            "**/*.user": true,
+            "**/*.csproj.user": true
+        },
+        "search.exclude": {
+            "Library": true,
+            "Logs": true,
+            "Obj": true,
+            "Temp": true,
+            "UserSettings": true
+        },
+        "omnisharp.useModernNet": false
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-dotnettools.csharp",
+            "ms-dotnettools.vscode-dotnet-runtime",
+            "unity.unity-debug"
+        ]
+    }
+}
