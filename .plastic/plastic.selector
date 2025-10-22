@@ -1,0 +1,4 @@
+repository "BattleDon@Compass_of_Truth@cloud"
+  path "/"
+    br "/main"
+    co "/main"
