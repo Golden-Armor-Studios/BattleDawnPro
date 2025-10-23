@@ -54,7 +54,7 @@ public class UI: EditorWindow
     private static Label mapStatusLabel;
     private static ListenerRegistration mapsListener;
     private static ObjectField mapPlanetSurfaceField;
-    private static string mapPlanetSurfaceResourcePath = "MapPallet/Ocean";
+    private static string mapPlanetSurfaceResourcePath = "MapPallet/Grass/Ocean";
 
     [MenuItem("Game Config/RunTime GameConfig")]
     static void Init()
@@ -1910,7 +1910,27 @@ public class UI: EditorWindow
             return null;
         }
 
-        return Resources.Load<Sprite>(resourcePath);
+        Sprite sprite = Resources.Load<Sprite>(resourcePath);
+        if (sprite != null)
+        {
+            return sprite;
+        }
+
+        // Fallback for legacy paths or when the folder was omitted.
+        if (!resourcePath.StartsWith("MapPallet/Grass/", System.StringComparison.OrdinalIgnoreCase))
+        {
+            string candidate = resourcePath.StartsWith("MapPallet/", System.StringComparison.OrdinalIgnoreCase)
+                ? resourcePath.Insert("MapPallet/".Length, "Grass/")
+                : $"MapPallet/Grass/{resourcePath}";
+            sprite = Resources.Load<Sprite>(candidate);
+            if (sprite != null)
+            {
+                return sprite;
+            }
+        }
+
+        Debug.LogWarning($"Unable to load sprite at Resources path '{resourcePath}'.");
+        return null;
     }
 
     private static string GetResourcePathForSprite(Sprite sprite)

@@ -236,7 +236,30 @@ public class Map {
         }
         Tile planetSurfaceTile = Resources.Load<Tile>(PlanetSurface);
         if (planetSurfaceTile == null) {
-            Debug.LogError($"Unable to load planet surface tile at path '{PlanetSurface}'.");
+            // Attempt to load a sprite and wrap it in a runtime Tile if a Tile asset could not be found.
+            Sprite sprite = Resources.Load<Sprite>(PlanetSurface);
+
+            if (sprite == null && !PlanetSurface.StartsWith("MapPallet/Grass/", StringComparison.OrdinalIgnoreCase))
+            {
+                string candidate = PlanetSurface.StartsWith("MapPallet/", StringComparison.OrdinalIgnoreCase)
+                    ? PlanetSurface.Insert("MapPallet/".Length, "Grass/")
+                    : $"MapPallet/Grass/{PlanetSurface}";
+                sprite = Resources.Load<Sprite>(candidate);
+                if (sprite != null)
+                {
+                    PlanetSurface = candidate;
+                }
+            }
+
+            if (sprite != null)
+            {
+                planetSurfaceTile = ScriptableObject.CreateInstance<Tile>();
+                planetSurfaceTile.sprite = sprite;
+            }
+        }
+
+        if (planetSurfaceTile == null) {
+            Debug.LogError($"Unable to load planet surface tile or sprite at path '{PlanetSurface}'.");
         } else {
             for (int i = 0; i < PlanetSize; i++) {
                 for (int y = 0; y < PlanetSize; y++ ) {
@@ -395,7 +418,10 @@ public class Map {
             Id = DB.Default.GenerateId(15);
             PlanetName = MapNameText;
             PlanetSize = TilesWideInput;
-            PlanetSurface = "MapPallet/Ocean";
+            if (string.IsNullOrEmpty(PlanetSurface))
+            {
+                PlanetSurface = "MapPallet/Grass/Ocean";
+            }
             
             DocumentReference docref = DB.Default.maps.Document(Id);
             DocumentReference MapDataRef = DB.Default.MapData.Document(Id);
