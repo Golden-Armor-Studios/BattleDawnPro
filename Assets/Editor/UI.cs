@@ -460,6 +460,7 @@ public class UI: EditorWindow
             firebaseStatusLabel.text = $"Signed in as: {currentUser.Email} · DB: {dbName}";
             firebaseStatusLabel.style.color = new Color(0.2f, 0.8f, 0.2f, 1f);
             firebaseFoldoutRef.value = false;
+            CollapsePrimaryFoldouts();
 
             if (githubUsernameLabel != null)
             {
@@ -520,6 +521,37 @@ public class UI: EditorWindow
         }
 
         return name;
+    }
+
+    private static void CollapsePrimaryFoldouts()
+    {
+        if (AttributeFoldout != null)
+        {
+            AttributeFoldout.value = false;
+        }
+
+        if (BuffsFoldout != null)
+        {
+            BuffsFoldout.value = false;
+        }
+
+        if (ResearchsFoldout != null)
+        {
+            ResearchsFoldout.value = false;
+        }
+
+        if (MapsFoldout != null)
+        {
+            MapsFoldout.value = false;
+        }
+
+        if (MapPaletteFoldout != null)
+        {
+            MapPaletteFoldout.value = false;
+        }
+
+        researchFoldoutState.Clear();
+        researchTypeFoldoutState.Clear();
     }
 
     private static async void SetAvatarAsync(Uri photoUri)

@@ -100,15 +100,34 @@ namespace  UI {
         public static async void InitUI () {
 
             MainContentGameObject = GameObject.Find("MainContent");
+            if (MainContentGameObject == null)
+            {
+                Debug.LogWarning("ResearchUI.InitUI aborted – 'MainContent' root not found in the active scene.");
+                return;
+            }
 
             Transform ResearchBackgroundGameObjectTransform = MainContentGameObject.transform.Find("ResearchBackground");
+            if (ResearchBackgroundGameObjectTransform == null)
+            {
+                Debug.LogWarning("ResearchUI.InitUI aborted – 'ResearchBackground' was not found under 'MainContent'.");
+                return;
+            }
             ResearchBackgroundGameObject = ResearchBackgroundGameObjectTransform.gameObject;
 
             MainNavigationGameObjectTransform = MainContentGameObject.transform.Find("MainNavigation");
+            if (MainNavigationGameObjectTransform == null)
+            {
+                Debug.LogWarning("ResearchUI.InitUI aborted – 'MainNavigation' was not found under 'MainContent'.");
+                return;
+            }
             MainNavigationGameObject = MainNavigationGameObjectTransform.gameObject;
 
             ResearchButtonsGameObjectTransform = MainContentGameObject.transform.Find("ResearchBackground/ResearchButtonGroup/ResearchButtons");
-            MainNavigationGameObject = MainNavigationGameObjectTransform.gameObject;
+            if (ResearchButtonsGameObjectTransform == null)
+            {
+                Debug.LogWarning("ResearchUI.InitUI aborted – 'ResearchButtons' container was not found.");
+                return;
+            }
 
             CacheResearchUiElements();
 

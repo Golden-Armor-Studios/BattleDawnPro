@@ -10,12 +10,135 @@ using UnityEngine.Networking;
 using System.Text;
 using System;
 using Firebase;
-using Firebase.Firestore;
+using Firebase.Auth;
 using Firebase.Extensions;
+using Firebase.Firestore;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Auth;
 using DB;
+
+internal static class MapControllerJson
+{
+    public static string Serialize(object value)
+    {
+        if (value == null)
+        {
+            return "null";
+        }
+
+        if (value is string s)
+        {
+            return "\"" + Escape(s) + "\"";
+        }
+
+        if (value is bool b)
+        {
+            return b ? "true" : "false";
+        }
+
+        if (value is Enum e)
+        {
+            return "\"" + Escape(e.ToString()) + "\"";
+        }
+
+        if (value is IFormattable f)
+        {
+            return f.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (value is IDictionary dict)
+        {
+            return SerializeDictionary(dict);
+        }
+
+        if (value is IEnumerable enumerable)
+        {
+            return SerializeEnumerable(enumerable);
+        }
+
+        return "\"" + Escape(value.ToString()) + "\"";
+    }
+
+    private static string SerializeDictionary(IDictionary dict)
+    {
+        var sb = new StringBuilder();
+        sb.Append('{');
+        bool first = true;
+        foreach (DictionaryEntry entry in dict)
+        {
+            if (entry.Key is not string key)
+            {
+                continue;
+            }
+
+            if (!first)
+            {
+                sb.Append(',');
+            }
+            first = false;
+            sb.Append('"').Append(Escape(key)).Append('"').Append(':');
+            sb.Append(Serialize(entry.Value));
+        }
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    private static string SerializeEnumerable(IEnumerable enumerable)
+    {
+        var sb = new StringBuilder();
+        sb.Append('[');
+        bool first = true;
+        foreach (var item in enumerable)
+        {
+            if (!first)
+            {
+                sb.Append(',');
+            }
+            first = false;
+            sb.Append(Serialize(item));
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    private static string Escape(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        foreach (char c in input)
+        {
+            switch (c)
+            {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (char.IsControl(c))
+                    {
+                        sb.AppendFormat("\\u{0:X4}", (int)c);
+                    }
+                    else
+                    {
+                        sb.Append(c);
+                    }
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+}
 
 public class MapController : EditorWindow
 {
@@ -136,11 +259,15 @@ public class MapController : EditorWindow
         button1.clicked += map.LoadMap;
         ButtonBox.Add(button1);
 
-        Button button2 = new Button();
-        button2.text = "Save Map";
-        button2.style.display = DisplayStyle.Flex;
-        button2.clicked += map.SaveMap;
-        ButtonBox.Add(button2);
+        var saveButton = new Button(map.SaveMap)
+        {
+            text = "Save Map",
+            style =
+            {
+                display = DisplayStyle.Flex
+            }
+        };
+        ButtonBox.Add(saveButton);
 
         Button button3 = new Button();
         button3.text = "Delete Map";
@@ -333,86 +460,6 @@ public class Map {
         }
         await MapDataRef.DeleteAsync();
     }
-    public async void SaveMap () {
-
-        GameObject PlanetSurfaceObject = GameObject.Find("PlanetSurface");
-        Tilemap PlanetSurfaceTilemap = PlanetSurfaceObject.GetComponent<Tilemap>();
-
-        GameObject GridObject = PlanetSurfaceObject.transform.parent.gameObject;
-        Id = GridObject.name.Split("Planet-")[1]; 
-        DocumentSnapshot mapSnapshot = await DB.Default.maps.Document(Id).GetSnapshotAsync();
-        Map map = mapSnapshot.ConvertTo<Map>();
-        Id = map.Id;
-        PlanetName = map.PlanetName;
-        PlanetSize = map.PlanetSize;
-        PlanetSurface = map.PlanetSurface;
-
-        GameObject ClearedGroundObject = GameObject.Find("ClearedGround");
-        Tilemap ClearedGroundTilemap = ClearedGroundObject.GetComponent<Tilemap>();
-
-        var mapDataDoc = await DB.Default.MapData.Document(Id).GetSnapshotAsync();
-        MapData existingData = null;
-        if (mapDataDoc.Exists)
-        {
-            existingData = mapDataDoc.ConvertTo<MapData>();
-        }
-
-        var chunkSize = existingData != null && existingData.ChunkSize > 0
-            ? existingData.ChunkSize
-            : MapData.DefaultChunkSize;
-
-        var chunks = new Dictionary<Vector2Int, List<_Tile>>();
-        int totalTiles = 0;
-
-        for (int i = 0; i < PlanetSize; i++) {
-                for (int y = 0; y < PlanetSize; y++ ) {
-                    if (ClearedGroundTilemap.HasTile(new Vector3Int(y,i,0))) {
-                        TileBase clearedGroundTilebase = ClearedGroundTilemap.GetTile(new Vector3Int(y,i,0));
-                        _Tile tile = new _Tile();
-                        tile.TileName = "MapPallet/" + clearedGroundTilebase.name;
-                        tile.x = y;
-                        tile.y = i;
-                        totalTiles++;
-
-                        var chunkCoord = new Vector2Int(tile.x / chunkSize, tile.y / chunkSize);
-                        if (!chunks.TryGetValue(chunkCoord, out var chunkTiles))
-                        {
-                            chunkTiles = new List<_Tile>();
-                            chunks.Add(chunkCoord, chunkTiles);
-                        }
-                        chunkTiles.Add(tile);
-                    }
-                }
-        }
-        
-        DocumentReference docref = DB.Default.maps.Document(Id);
-        DocumentReference MapDataRef = DB.Default.MapData.Document(Id);
-        var chunkCollection = MapDataRef.Collection("Chunks");
-
-        var existingChunks = await chunkCollection.GetSnapshotAsync();
-        foreach (var chunk in existingChunks.Documents)
-        {
-            await chunk.Reference.DeleteAsync();
-        }
-
-        var chunkIds = new List<string>();
-        foreach (var kvp in chunks)
-        {
-            var chunkId = $"{kvp.Key.x}_{kvp.Key.y}";
-            chunkIds.Add(chunkId);
-            await chunkCollection.Document(chunkId).SetAsync(new MapChunk { Tiles = kvp.Value });
-        }
-        chunkIds.Sort();
-
-        var mapData = existingData ?? new MapData();
-        mapData.ChunkSize = chunkSize;
-        mapData.ChunkIds = chunkIds;
-        mapData.TileCount = totalTiles;
-
-        await docref.SetAsync(this);
-        await MapDataRef.SetAsync(mapData);
-
-    }
     public async void createMap(string MapNameText, int TilesWideInput) {
         try {
             Id = DB.Default.GenerateId(15);
@@ -422,21 +469,376 @@ public class Map {
             {
                 PlanetSurface = "MapPallet/Grass/Ocean";
             }
-            
-            DocumentReference docref = DB.Default.maps.Document(Id);
-            DocumentReference MapDataRef = DB.Default.MapData.Document(Id);
-            var mapData = new MapData
-            {
-                ChunkSize = MapData.DefaultChunkSize,
-                ChunkIds = new List<string>(),
-                TileCount = 0
-            };
-            await docref.SetAsync(this);
-            await MapDataRef.SetAsync(mapData);
         } catch (FirebaseException e) {
             Debug.LogError(e);
         }
     }
+
+    private static bool isSavingMap;
+
+    public void SaveMap()
+    {
+        SaveMap(this);
+    }
+
+    public async void SaveMap(Map map)
+    {
+        DB.Default.Init();
+        if (DB.Default.maps == null || DB.Default.MapData == null)
+        {
+            Debug.LogError("Firestore map collections are not initialised. Sign in before saving the map.");
+            return;
+        }
+
+        if (isSavingMap)
+        {
+            Debug.LogWarning("A map save is already in progress. Please wait until it finishes.");
+            return;
+        }
+
+        isSavingMap = true;
+
+        try
+        {
+            EditorUtility.DisplayProgressBar("Save Map", "Gathering tiles...", 0.1f);
+
+            var planetSurfaceObject = GameObject.Find("PlanetSurface");
+            var clearedGroundObject = GameObject.Find("ClearedGround");
+            if (planetSurfaceObject == null || clearedGroundObject == null)
+            {
+                Debug.LogError("Required tilemap objects not found.");
+                return;
+            }
+            var planetSurfaceTilemap = planetSurfaceObject.GetComponent<Tilemap>();
+            var clearedGroundTilemap = clearedGroundObject.GetComponent<Tilemap>();
+            if (planetSurfaceTilemap == null || clearedGroundTilemap == null)
+            {
+                Debug.LogError("Required tilemap components missing.");
+                return;
+            }
+
+            GameObject gridObject = planetSurfaceObject.transform.parent != null
+                ? planetSurfaceObject.transform.parent.gameObject
+                : null;
+            Id = ExtractMapIdFromGrid(gridObject);
+            if (string.IsNullOrEmpty(Id))
+            {
+                Debug.LogError("Unable to determine map id from the grid object name.");
+                return;
+            }
+
+            DocumentSnapshot mapSnapshot = await DB.Default.maps.Document(Id).GetSnapshotAsync();
+            Map mapDocument = mapSnapshot.Exists ? mapSnapshot.ConvertTo<Map>() : null;
+            if (mapDocument != null)
+            {
+                Id = !string.IsNullOrEmpty(mapSnapshot.Id) ? mapSnapshot.Id : Id;
+                map.PlanetName = mapDocument.PlanetName;
+                map.PlanetSize = mapDocument.PlanetSize;
+                map.PlanetSurface = mapDocument.PlanetSurface;
+            }
+            else if (map.PlanetSize <= 0)
+            {
+                Debug.LogWarning($"Map '{Id}' was not found in Firestore; retaining current planet size {map.PlanetSize}.");
+            }
+
+            var mapDataDoc = await DB.Default.MapData.Document(Id).GetSnapshotAsync();
+            MapData existingData = mapDataDoc.Exists ? mapDataDoc.ConvertTo<MapData>() : null;
+            int chunkSize = existingData != null && existingData.ChunkSize > 0
+                ? existingData.ChunkSize
+                : MapData.DefaultChunkSize;
+
+            var chunks = new Dictionary<Vector2Int, List<_Tile>>();
+            int totalTiles = 0;
+
+            void AddTile(Vector3Int cell, string tileName, string tileLayer)
+            {
+                var coord = new Vector2Int(Mathf.FloorToInt((float)cell.x / chunkSize), Mathf.FloorToInt((float)cell.y / chunkSize));
+                if (!chunks.TryGetValue(coord, out var tiles))
+                {
+                    tiles = new List<_Tile>();
+                    chunks.Add(coord, tiles);
+                }
+
+                tiles.Add(new _Tile
+                {
+                    TileName = tileName,
+                    TileObjectPath = null,
+                    TileLayer = tileLayer,
+                    x = cell.x,
+                    y = cell.y
+                });
+
+                totalTiles++;
+            }
+
+            planetSurfaceTilemap.CompressBounds();
+            clearedGroundTilemap.CompressBounds();
+
+            var overlayBounds = clearedGroundTilemap.cellBounds;
+            for (int x = overlayBounds.xMin; x < overlayBounds.xMax; x++)
+            {
+                for (int y = overlayBounds.yMin; y < overlayBounds.yMax; y++)
+                {
+                    var cell = new Vector3Int(x, y, 0);
+                    TileBase tileBase = clearedGroundTilemap.GetTile(cell);
+                    if (tileBase == null)
+                    {
+                        continue;
+                    }
+                    AddTile(cell, "MapPallet/" + tileBase.name, "Overlay");
+                }
+            }
+
+            bool cancelRequested = false;
+
+            bool UpdateProgress(string message, float progress)
+            {
+                if (cancelRequested)
+                {
+                    return true;
+                }
+
+                if (EditorUtility.DisplayCancelableProgressBar("Save Map", message, Mathf.Clamp01(progress)))
+                {
+                    cancelRequested = true;
+                    Debug.LogWarning("Save Map cancelled by user.");
+                    return true;
+                }
+
+                return false;
+            }
+
+            UpdateProgress("Preparing payload...", 0.6f);
+            if (cancelRequested)
+            {
+                return;
+            }
+
+            var chunkPayloads = new List<(Dictionary<string, object> payload, int tileCount)>();
+            foreach (var kvp in chunks)
+            {
+                var tiles = new List<Dictionary<string, object>>();
+                foreach (var tile in kvp.Value)
+                {
+                    tiles.Add(new Dictionary<string, object>
+                    {
+                        {"x", tile.x},
+                        {"y", tile.y},
+                        {"TileName", tile.TileName},
+                        {"TileObjectPath", tile.TileObjectPath ?? (object)null},
+                        {"TileLayer", string.IsNullOrEmpty(tile.TileLayer) ? "Overlay" : tile.TileLayer}
+                    });
+                }
+
+                var payload = new Dictionary<string, object>
+                {
+                    {"id", $"{kvp.Key.x}_{kvp.Key.y}"},
+                    {"Tiles", tiles},
+                    {"tiles", tiles}
+                };
+
+                chunkPayloads.Add((payload, tiles.Count));
+            }
+
+            var chunkIds = chunkPayloads
+                .Select(chunk => chunk.payload.TryGetValue("id", out var idObj) ? idObj as string : null)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .Distinct()
+                .ToList();
+
+            Debug.Log($"SaveMap preparing {chunkPayloads.Count} chunks and {totalTiles} tiles (chunkSize {chunkSize}).");
+
+            const int MaxTilesPerRequest = 1000;
+            var chunkGroups = new List<List<Dictionary<string, object>>>();
+            var currentGroup = new List<Dictionary<string, object>>();
+            int currentTileCount = 0;
+
+            foreach (var (payload, tileCount) in chunkPayloads)
+            {
+                int effectiveCount = Mathf.Max(tileCount, 1);
+                if (effectiveCount >= MaxTilesPerRequest)
+                {
+                    if (currentGroup.Count > 0)
+                    {
+                        chunkGroups.Add(currentGroup);
+                        currentGroup = new List<Dictionary<string, object>>();
+                        currentTileCount = 0;
+                    }
+                    chunkGroups.Add(new List<Dictionary<string, object>> { payload });
+                    continue;
+                }
+
+                if (currentTileCount + effectiveCount > MaxTilesPerRequest && currentGroup.Count > 0)
+                {
+                    chunkGroups.Add(currentGroup);
+                    currentGroup = new List<Dictionary<string, object>>();
+                    currentTileCount = 0;
+                }
+
+                currentGroup.Add(payload);
+                currentTileCount += effectiveCount;
+            }
+
+            if (currentGroup.Count > 0)
+            {
+                chunkGroups.Add(currentGroup);
+            }
+
+            Debug.Log($"SaveMap grouping into {chunkGroups.Count} batches (max {MaxTilesPerRequest} tiles per batch).");
+
+            var user = await Auth.User.EnsureLoggedInAsync();
+            if (user == null)
+            {
+                throw new InvalidOperationException("User must be signed in before saving the map.");
+            }
+
+            string idToken = await user.TokenAsync(true);
+            string projectId = Auth.User.app?.Options?.ProjectId
+                ?? FirebaseApp.DefaultInstance?.Options?.ProjectId
+                ?? DB.Default.Database?.App?.Options?.ProjectId;
+
+            if (string.IsNullOrEmpty(projectId))
+            {
+                throw new InvalidOperationException("Unable to determine Firebase project id for saveMap call.");
+            }
+
+            string url = $"https://us-central1-{projectId}.cloudfunctions.net/saveMap";
+
+            async Task<bool> PostBatchAsync(List<Dictionary<string, object>> chunkBatch, bool includeChunkIdList, bool deleteMissing, int batchIndex, int totalBatches)
+            {
+                var requestPayload = new Dictionary<string, object>
+                {
+                    {"mapId", Id},
+                    {"planetName", PlanetName ?? string.Empty},
+                    {"planetSurface", PlanetSurface ?? string.Empty},
+                    {"planetSize", PlanetSize},
+                    {"chunkSize", chunkSize},
+                    {"tileCount", totalTiles},
+                    {"chunks", chunkBatch},
+                    {"deleteMissingChunks", deleteMissing}
+                };
+
+                if (includeChunkIdList)
+                {
+                    requestPayload["chunkIds"] = chunkIds;
+                    Debug.Log($"SaveMap -> including {chunkIds.Count} chunk ids in metadata call.");
+                }
+
+                #if UNITY_EDITOR
+                Debug.Log($"SaveMap -> sending batch {batchIndex}/{totalBatches}: mapId='{Id}', chunks={chunkBatch.Count}, includeChunkIds={includeChunkIdList}, deleteMissing={deleteMissing}");
+                #endif
+
+                string statusLabel = chunkBatch.Count > 0
+                    ? $"Uploading chunk batch {batchIndex}/{totalBatches} ({chunkBatch.Count} chunks)"
+                    : "Finalising map metadata";
+                float progress = 0.6f + 0.4f * (batchIndex / (float)totalBatches);
+                if (UpdateProgress(statusLabel, progress))
+                {
+                    return false;
+                }
+
+                var callablePayload = new Dictionary<string, object>
+                {
+                    {"data", requestPayload}
+                };
+
+                string jsonBody = MapControllerJson.Serialize(callablePayload);
+
+                using (var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST))
+                {
+                    byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
+                    request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                    request.downloadHandler = new DownloadHandlerBuffer();
+                    request.SetRequestHeader("Content-Type", "application/json");
+                    request.SetRequestHeader("Authorization", $"Bearer {idToken}");
+
+                    var operation = request.SendWebRequest();
+                    while (!operation.isDone)
+                    {
+                        await Task.Yield();
+                    }
+
+                    if (request.result != UnityWebRequest.Result.Success)
+                    {
+                        string responseText = request.downloadHandler?.text;
+                        Debug.LogError($"SaveMap batch {batchIndex}/{totalBatches} failed. Payload: {jsonBody}");
+                        string message = $"saveMap request failed ({request.responseCode}): {request.error}\n{responseText}";
+                        throw new InvalidOperationException(message);
+                    }
+
+                    Debug.Log($"Cloud function saveMap batch {batchIndex}/{totalBatches} response: {request.downloadHandler?.text}");
+                }
+
+                return true;
+            }
+
+            int totalRequests = chunkGroups.Count + 1;
+            if (totalRequests <= 0)
+            {
+                totalRequests = 1;
+            }
+
+            int requestNumber = 0;
+            foreach (var batch in chunkGroups)
+            {
+                requestNumber++;
+                if (!await PostBatchAsync(batch, false, false, requestNumber, totalRequests))
+                {
+                    break;
+                }
+            }
+
+            if (!cancelRequested)
+            {
+                requestNumber++;
+                await PostBatchAsync(
+                    new List<Dictionary<string, object>>(),
+                    true,
+                    true,
+                    requestNumber,
+                    totalRequests
+                );
+            }
+            else
+            {
+                Debug.LogWarning("Save Map cancelled before completion. No further batches sent.");
+                return;
+            }
+
+            if (!cancelRequested)
+            {
+                UpdateProgress("Completed", 1f);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError(ex);
+        }
+        finally
+        {
+            isSavingMap = false;
+            EditorUtility.ClearProgressBar();
+        }
+    }
+
+    private static string ExtractMapIdFromGrid(GameObject gridObject)
+    {
+        if (gridObject == null)
+        {
+            return null;
+        }
+
+        string name = gridObject.name;
+        const string prefix = "Planet-";
+        if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return name.Substring(prefix.Length);
+        }
+
+        return name;
+    }
+
+
 
 }
 
@@ -471,6 +873,10 @@ public class _Tile {
         public string Id { get; set; }
     [FirestoreProperty]
         public string TileName { get; set; }
+    [FirestoreProperty]
+        public string TileObjectPath { get; set; }
+    [FirestoreProperty]
+        public string TileLayer { get; set; }
     [FirestoreProperty]
         public int x{ get; set; }
     [FirestoreProperty]

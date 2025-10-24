@@ -10,8 +10,8 @@ public class PlayerInput : MonoBehaviour
     [SerializeField, Range(0.01f, 1f)] private float mapTouchEasingDistance = .12f;
     [SerializeField, Range(0.01f, 1f)] private float mapTouchEasingSpeed = .14f;
     [SerializeField] private float zoomSpeed = 0.01f;
-    [SerializeField] private float zoomInBound = 3f;
-    [SerializeField] private float zoomOutBound = 15f;
+    [SerializeField] private float zoomInBound = 2.93f;
+    [SerializeField] private float zoomOutBound = 4.72f;
 #if UNITY_EDITOR
     [SerializeField] private float editorScrollMultiplier = 25f;
 #endif
