@@ -1,14 +1,53 @@
 "use strict";
 
-const functions = require("firebase-functions");
-const admin = require("firebase-admin");
-const {CloudTasksClient} = require("@google-cloud/tasks");
 
-if (admin.apps.length === 0) {
-  admin.initializeApp();
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+const { initializeApp, applicationDefault, getApp, getApps } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { CloudTasksClient } = require('@google-cloud/tasks');
+
+const DEFAULT_PROJECT_ID = "goldenarmorstudios";
+const FIRESTORE_DATABASE_ID = "battledawnpro";
+
+function resolveProjectId() {
+  return (
+    process.env.GCLOUD_PROJECT ||
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    DEFAULT_PROJECT_ID
+  );
 }
 
-const firestore = admin.firestore();
+function ensureAdmin() {
+  if (!getApps().length) {
+    const projectId = resolveProjectId();
+    initializeApp({
+      credential: applicationDefault(),
+      projectId
+    });
+  }
+  return getApp();
+}
+
+function getDb() {
+  const app = ensureAdmin();
+  return getFirestore(app, FIRESTORE_DATABASE_ID);
+}
+
+let firestore = null;
+
+function ensureDb() {
+  if (!firestore) {
+    firestore = getDb();
+  }
+  return firestore;
+}
+
+const RUNNING_IN_GCF = Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET);
+if (RUNNING_IN_GCF) {
+  ensureAdmin();
+}
+
 const tasksClient = new CloudTasksClient();
 
 const MAX_BATCH_WRITES = 450;
@@ -19,6 +58,20 @@ const TASK_LOCATION = "us-west2";
 const TASK_QUEUE_NAME = "BattleDawnPro-SaveMap";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getTasksServiceAccountEmail(projectId) {
+  const fromEnv = (process.env.TASKS_SERVICE_ACCOUNT_EMAIL || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const cfg = functions.config();
+    if (cfg && cfg.tasks && cfg.tasks.service_account_email) {
+      return cfg.tasks.service_account_email;
+    }
+  } catch (_) {
+    // functions config not available locally
+  }
+  return `${projectId}@appspot.gserviceaccount.com`;
+}
 
 async function ensureQueue(projectId) {
   const queuePath = tasksClient.queuePath(projectId, TASK_LOCATION, TASK_QUEUE_NAME);
@@ -160,11 +213,13 @@ async function commitOperationsInBatches(operations, label) {
   }
 }
 
-exports.saveMap = functions
+const saveMap = functions
   .region("us-central1")
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .https.onCall(async (data, context) => {
     try {
+      // Ensure Firestore is initialized
+      ensureDb();
       ensureAuthenticated(context);
 
       if (!data || typeof data !== "object") {
@@ -189,7 +244,7 @@ exports.saveMap = functions
         chunkCount: Array.isArray(chunks) ? chunks.length : undefined,
         deleteMissingChunks
       });
-      const chunkIdsOverride = data.chunkIds;
+    const chunkIdsOverride = data.chunkIds;
 
     if (typeof mapId !== "string" || mapId.trim().length === 0) {
       throw new functions.https.HttpsError("invalid-argument", "mapId must be a non-empty string.");
@@ -274,20 +329,21 @@ exports.saveMap = functions
       );
     }
 
-    const mapRef = firestore.collection("maps").doc(mapId);
-    const mapDataRef = firestore.collection("MapData").doc(mapId);
+  const mapRef = firestore.collection("maps").doc(mapId);
+  const mapDataRef = firestore.collection("MapData").doc(mapId);
     const chunksCollection = mapDataRef.collection("Chunks");
 
-    const now = admin.firestore.FieldValue.serverTimestamp();
+    const now = FieldValue.serverTimestamp();
 
-    const projectId = admin.app().options.projectId || process.env.GCLOUD_PROJECT;
+    const projectOptions = ensureAdmin().options || {};
+    const projectId = projectOptions.projectId || resolveProjectId();
     if (!projectId) {
       throw new functions.https.HttpsError("internal", "Unable to determine project id for Cloud Tasks.");
     }
 
     const queuePath = await ensureQueue(projectId);
     const taskHandlerUrl = `https://${TASK_LOCATION}-${projectId}.cloudfunctions.net/processMapTileTask`;
-    const serviceAccountEmail = `${projectId}@appspot.gserviceaccount.com`;
+    const serviceAccountEmail = getTasksServiceAccountEmail(projectId);
 
       const pendingTaskPromises = [];
       const FLUSH_SIZE = 100;
@@ -457,10 +513,13 @@ exports.saveMap = functions
     }
   });
 
-exports.processMapTileTask = functions
+const processMapTileTask = functions
   .region("us-west2")
   .runWith({timeoutSeconds: 120, memory: "8GB"})
   .https.onRequest(async (req, res) => {
+    // Ensure Firestore is initialized
+    ensureDb();
+
     if (req.method !== "POST") {
       res.status(405).send("Method Not Allowed");
       return;
@@ -515,7 +574,7 @@ exports.processMapTileTask = functions
 
     const updateData = {
       Tiles: normalizedTiles.length ? normalizedTiles : [],
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: FieldValue.serverTimestamp()
     };
 
     if (typeof chunkSize === "number" && chunkSize > 0) {
@@ -533,6 +592,12 @@ exports.processMapTileTask = functions
     res.status(200).json({success: true, processedTiles: normalizedTiles.length});
   });
 
-exports.health = functions.https.onCall(async () => {
+const health = functions.https.onCall(async () => {
   return { status: "ok", time: admin.firestore.Timestamp.now().toDate().toISOString() };
 });
+
+module.exports = {
+  saveMap,
+  processMapTileTask,
+  health
+};

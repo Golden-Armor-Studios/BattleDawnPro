@@ -13,6 +13,14 @@ BattleDawnPro’s Unity editor tooling centralises live-game configuration so de
 
 ---
 
+## Next Steps
+
+- **Large map upload safety net** – design guardrails that let Unity designers push chunk updates while live players remain online, ensuring SSO hubs or critical map props can’t be dropped accidentally.
+- **Selective resave workflow** – add pre-save diffing so repeated uploads only send mutated chunks, avoiding manual merges back into Firestore.
+- **In-editor validation** – surface warnings when a save request would delete existing structures or queued tasks, reducing late-night emergency restores.
+
+---
+
 ## Prerequisites
 
 - Unity **2021.3 LTS** (or the project’s pinned version).  

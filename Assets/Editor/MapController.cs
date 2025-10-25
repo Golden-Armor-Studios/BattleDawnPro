@@ -19,6 +19,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Auth;
 using DB;
+using System.IO;
 
 internal static class MapControllerJson
 {
@@ -332,117 +333,160 @@ public class Map {
         public string PlanetSurface { get; set; }
     
 
+    private static bool isLoadingMap;
+
     public async void LoadMap () {
-        GameObject GridObject = new GameObject();
-        GridObject.name = "Planet";
-        Grid Planet = GridObject.AddComponent<Grid>();
-        Planet.name = "Planet-" + Id ;
-        Planet.cellLayout = GridLayout.CellLayout.Rectangle;
-        
-        GameObject PlanetSurfaceObject = new GameObject();
-        PlanetSurfaceObject.name = "PlanetSurface";
-        Tilemap PlanetSurfaceTilemap = PlanetSurfaceObject.AddComponent<Tilemap>();
-        PlanetSurfaceTilemap.name = "PlanetSurface";
-
-        GameObject ClearedGroundObject = new GameObject();
-        ClearedGroundObject.name = "ClearedGround";
-        Tilemap ClearedGroundTilemap = ClearedGroundObject.AddComponent<Tilemap>();
-        ClearedGroundTilemap.name = "ClearedGround";
-        ClearedGroundTilemap.transform.position = new Vector3(ClearedGroundTilemap.transform.position.x, ClearedGroundTilemap.transform.position.y, -1);
-
-        PlanetSurfaceObject.transform.SetParent(Planet.transform);
-        ClearedGroundObject.transform.SetParent(Planet.transform);
-
-
-        DocumentSnapshot MapDataSnapshot = await DB.Default.MapData.Document(Id).GetSnapshotAsync();
-        MapData mapData = null;
-        if (MapDataSnapshot.Exists) {
-            mapData = MapDataSnapshot.ConvertTo<MapData>();
-        } else {
-            Debug.LogWarning($"Map data for id {Id} was not found.");
+        if (isLoadingMap)
+        {
+            Debug.LogWarning($"A map load is already running. Skipping request for '{Id}'.");
+            return;
         }
-        Tile planetSurfaceTile = Resources.Load<Tile>(PlanetSurface);
-        if (planetSurfaceTile == null) {
-            // Attempt to load a sprite and wrap it in a runtime Tile if a Tile asset could not be found.
-            Sprite sprite = Resources.Load<Sprite>(PlanetSurface);
 
-            if (sprite == null && !PlanetSurface.StartsWith("MapPallet/Grass/", StringComparison.OrdinalIgnoreCase))
-            {
-                string candidate = PlanetSurface.StartsWith("MapPallet/", StringComparison.OrdinalIgnoreCase)
-                    ? PlanetSurface.Insert("MapPallet/".Length, "Grass/")
-                    : $"MapPallet/Grass/{PlanetSurface}";
-                sprite = Resources.Load<Sprite>(candidate);
+        isLoadingMap = true;
+        try
+        {
+            Debug.Log($"Loading map '{Id}'...");
+            EditorUtility.DisplayProgressBar("Load Map", "Preparing scene...", 0.05f);
+
+            GameObject GridObject = new GameObject();
+            GridObject.name = "Planet";
+            Grid Planet = GridObject.AddComponent<Grid>();
+            Planet.name = "Planet-" + Id ;
+            Planet.cellLayout = GridLayout.CellLayout.Rectangle;
+            
+            GameObject PlanetSurfaceObject = new GameObject();
+            PlanetSurfaceObject.name = "PlanetSurface";
+            Tilemap PlanetSurfaceTilemap = PlanetSurfaceObject.AddComponent<Tilemap>();
+            PlanetSurfaceTilemap.name = "PlanetSurface";
+            TilemapRenderer PlanetSurfaceRenderer = PlanetSurfaceObject.AddComponent<TilemapRenderer>();
+            PlanetSurfaceRenderer.sortingLayerName = "Default";
+            PlanetSurfaceRenderer.sortingOrder = 0;
+
+            GameObject ClearedGroundObject = new GameObject();
+            ClearedGroundObject.name = "ClearedGround";
+            Tilemap ClearedGroundTilemap = ClearedGroundObject.AddComponent<Tilemap>();
+            ClearedGroundTilemap.name = "ClearedGround";
+            ClearedGroundTilemap.transform.position = new Vector3(ClearedGroundTilemap.transform.position.x, ClearedGroundTilemap.transform.position.y, -1);
+            TilemapRenderer ClearedGroundRenderer = ClearedGroundObject.AddComponent<TilemapRenderer>();
+            ClearedGroundRenderer.sortingLayerName = PlanetSurfaceRenderer.sortingLayerName;
+            ClearedGroundRenderer.sortingOrder = PlanetSurfaceRenderer.sortingOrder + 1;
+
+            PlanetSurfaceObject.transform.SetParent(Planet.transform);
+            ClearedGroundObject.transform.SetParent(Planet.transform);
+
+            EditorUtility.DisplayProgressBar("Load Map", "Fetching map data...", 0.2f);
+            DocumentSnapshot MapDataSnapshot = await DB.Default.MapData.Document(Id).GetSnapshotAsync();
+            MapData mapData = null;
+            if (MapDataSnapshot.Exists) {
+                mapData = MapDataSnapshot.ConvertTo<MapData>();
+            } else {
+                Debug.LogWarning($"Map data for id {Id} was not found.");
+            }
+
+            EditorUtility.DisplayProgressBar("Load Map", "Loading base surface...", 0.3f);
+            Tile planetSurfaceTile = Resources.Load<Tile>(PlanetSurface);
+            if (planetSurfaceTile == null) {
+                // Attempt to load a sprite and wrap it in a runtime Tile if a Tile asset could not be found.
+                Sprite sprite = Resources.Load<Sprite>(PlanetSurface);
+
+                if (sprite == null && !PlanetSurface.StartsWith("MapPallet/Grass/", StringComparison.OrdinalIgnoreCase))
+                {
+                    string candidate = PlanetSurface.StartsWith("MapPallet/", StringComparison.OrdinalIgnoreCase)
+                        ? PlanetSurface.Insert("MapPallet/".Length, "Grass/")
+                        : $"MapPallet/Grass/{PlanetSurface}";
+                    sprite = Resources.Load<Sprite>(candidate);
+                    if (sprite != null)
+                    {
+                        PlanetSurface = candidate;
+                    }
+                }
+
                 if (sprite != null)
                 {
-                    PlanetSurface = candidate;
+                    planetSurfaceTile = ScriptableObject.CreateInstance<Tile>();
+                    planetSurfaceTile.sprite = sprite;
                 }
             }
 
-            if (sprite != null)
-            {
-                planetSurfaceTile = ScriptableObject.CreateInstance<Tile>();
-                planetSurfaceTile.sprite = sprite;
-            }
-        }
+            if (planetSurfaceTile == null) {
+                Debug.LogError($"Unable to load planet surface tile or sprite at path '{PlanetSurface}'.");
+            } else {
+                for (int i = 0; i < PlanetSize; i++) {
+                    for (int y = 0; y < PlanetSize; y++ ) {
+                        PlanetSurfaceTilemap.SetTile(new Vector3Int(y,i,0), planetSurfaceTile);
+                    }
 
-        if (planetSurfaceTile == null) {
-            Debug.LogError($"Unable to load planet surface tile or sprite at path '{PlanetSurface}'.");
-        } else {
-            for (int i = 0; i < PlanetSize; i++) {
-                for (int y = 0; y < PlanetSize; y++ ) {
-                    PlanetSurfaceTilemap.SetTile(new Vector3Int(y,i,0), planetSurfaceTile);
+                    if (i % 16 == 0)
+                    {
+                        float surfaceProgress = 0.35f + 0.2f * ((float)(i + 1) / Mathf.Max(1, PlanetSize));
+                        EditorUtility.DisplayProgressBar("Load Map", $"Painting planet surface... ({i + 1}/{PlanetSize})", Mathf.Clamp01(surfaceProgress));
+                        await Task.Yield();
+                    }
                 }
             }
-        }
-        var tilesToApply = new List<_Tile>();
+
+            EditorUtility.DisplayProgressBar("Load Map", "Resolving cleared tiles...", 0.55f);
+            var tilesToApply = new List<_Tile>();
         if (mapData != null)
         {
             if (mapData.Tiles != null && mapData.Tiles.Count > 0)
             {
-                tilesToApply.AddRange(mapData.Tiles);
+                tilesToApply.AddRange(NormalizeStoredTiles(mapData.Tiles));
             }
             else if (mapData.ChunkIds != null && mapData.ChunkIds.Count > 0)
             {
                 var mapDataRef = DB.Default.MapData.Document(Id);
                 var chunkCollection = mapDataRef.Collection("Chunks");
-                var chunkTasks = new List<Task<DocumentSnapshot>>();
-                foreach (var chunkId in mapData.ChunkIds)
-                {
-                    chunkTasks.Add(chunkCollection.Document(chunkId).GetSnapshotAsync());
-                }
+                    var chunkTasks = new List<Task<DocumentSnapshot>>();
+                    foreach (var chunkId in mapData.ChunkIds)
+                    {
+                        chunkTasks.Add(chunkCollection.Document(chunkId).GetSnapshotAsync());
+                    }
 
-                var chunkSnapshots = await Task.WhenAll(chunkTasks);
-                foreach (var chunkSnapshot in chunkSnapshots)
-                {
+                    var chunkSnapshots = await Task.WhenAll(chunkTasks);
+                    foreach (var chunkSnapshot in chunkSnapshots)
+                    {
                     if (!chunkSnapshot.Exists) continue;
                     var chunk = chunkSnapshot.ConvertTo<MapChunk>();
                     if (chunk?.Tiles != null)
                     {
-                        tilesToApply.AddRange(chunk.Tiles);
+                        tilesToApply.AddRange(NormalizeStoredTiles(chunk.Tiles));
                     }
                 }
             }
         }
 
-        foreach (_Tile tile in tilesToApply) {
-                Tile ClearedGroundTile = Resources.Load<Tile>(tile.TileName);
-                if (ClearedGroundTile == null) {
-                    RuleTile ClearedGroundRuleTile = Resources.Load<RuleTile>(tile.TileName);
-                    if (ClearedGroundRuleTile != null) {
-                        ClearedGroundTilemap.SetTile(new Vector3Int(tile.x,tile.y,0), ClearedGroundRuleTile);
-                    } else {
-                        Debug.LogWarning($"Unable to load tile or rule tile at path '{tile.TileName}'.");
-                    }
+            int applied = 0;
+            int totalToApply = tilesToApply.Count;
+            foreach (_Tile tile in tilesToApply) {
+                TileBase clearedTile = ResolveStoredTile(tile);
+                if (clearedTile == null) {
+                    Debug.LogWarning($"Unable to resolve tile '{tile.TileName}' (asset '{tile.TileObjectPath}').");
                 } else {
-                    ClearedGroundTilemap.SetTile(new Vector3Int(tile.x,tile.y,0), ClearedGroundTile);
+                    ClearedGroundTilemap.SetTile(new Vector3Int(tile.x,tile.y,0), clearedTile);
+                }
+
+                applied++;
+                if (applied % 500 == 0)
+                {
+                    float overlayProgress = 0.75f + 0.2f * ((float)applied / Mathf.Max(1, totalToApply));
+                    EditorUtility.DisplayProgressBar("Load Map", $"Applying cleared tiles... ({applied}/{totalToApply})", Mathf.Clamp01(overlayProgress));
+                    await Task.Yield();
                 }
             }
-        PlanetSurfaceTilemap.RefreshAllTiles();
+            PlanetSurfaceTilemap.RefreshAllTiles();
 
-
-
-
-        
+            Debug.Log($"Loaded map '{Id}' with {totalToApply} overlay tiles.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Failed to load map '{Id}': {ex}");
+        }
+        finally
+        {
+            EditorUtility.ClearProgressBar();
+            isLoadingMap = false;
+        }
         // Camera.main.transform.position = new Vector3(PlanetTileMap.cellBounds.center.x, PlanetTileMap.cellBounds.center.y, Camera.main.transform.position.z);
     }
     public static void UnLoadMap () {
@@ -550,8 +594,17 @@ public class Map {
             var chunks = new Dictionary<Vector2Int, List<_Tile>>();
             int totalTiles = 0;
 
-            void AddTile(Vector3Int cell, string tileName, string tileLayer)
+            void AddTile(Vector3Int cell, TileBase tileBase, string tileLayer)
             {
+                if (tileBase == null)
+                {
+                    return;
+                }
+
+                string resourcePath = ResolveTileResourcePath(tileBase);
+                string assetPath = ResolveTileAssetPath(tileBase);
+                string serializedName = !string.IsNullOrEmpty(resourcePath) ? resourcePath : tileBase.name;
+
                 var coord = new Vector2Int(Mathf.FloorToInt((float)cell.x / chunkSize), Mathf.FloorToInt((float)cell.y / chunkSize));
                 if (!chunks.TryGetValue(coord, out var tiles))
                 {
@@ -561,8 +614,8 @@ public class Map {
 
                 tiles.Add(new _Tile
                 {
-                    TileName = tileName,
-                    TileObjectPath = null,
+                    TileName = serializedName,
+                    TileObjectPath = assetPath,
                     TileLayer = tileLayer,
                     x = cell.x,
                     y = cell.y
@@ -585,7 +638,7 @@ public class Map {
                     {
                         continue;
                     }
-                    AddTile(cell, "MapPallet/" + tileBase.name, "Overlay");
+                    AddTile(cell, tileBase, "Overlay");
                 }
             }
 
@@ -819,6 +872,145 @@ public class Map {
             isSavingMap = false;
             EditorUtility.ClearProgressBar();
         }
+    }
+
+    private static string ResolveTileResourcePath(TileBase tileBase)
+    {
+        if (tileBase == null)
+        {
+            return null;
+        }
+
+        string assetPath = AssetDatabase.GetAssetPath(tileBase);
+        if (string.IsNullOrEmpty(assetPath))
+        {
+            return null;
+        }
+
+        assetPath = assetPath.Replace("\\", "/");
+        const string resourcesToken = "/Resources/";
+        int index = assetPath.IndexOf(resourcesToken, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        int start = index + resourcesToken.Length;
+        string relative = assetPath.Substring(start);
+        relative = Path.ChangeExtension(relative, null);
+        return relative?.Replace("\\", "/");
+    }
+
+    private static string ResolveTileAssetPath(TileBase tileBase)
+    {
+        if (tileBase == null)
+        {
+            return null;
+        }
+
+        string assetPath = AssetDatabase.GetAssetPath(tileBase);
+        return string.IsNullOrEmpty(assetPath) ? null : assetPath.Replace("\\", "/");
+    }
+
+    private static IEnumerable<_Tile> NormalizeStoredTiles(IEnumerable<_Tile> tiles)
+    {
+        if (tiles == null)
+        {
+            yield break;
+        }
+
+        foreach (var tile in tiles)
+        {
+            if (tile == null)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(tile.TileName) && !string.IsNullOrEmpty(tile.TileObjectPath))
+            {
+                var asset = AssetDatabase.LoadAssetAtPath<TileBase>(tile.TileObjectPath);
+                string resourcePath = ResolveTileResourcePath(asset);
+                if (!string.IsNullOrEmpty(resourcePath))
+                {
+                    tile.TileName = resourcePath;
+                }
+            }
+
+            yield return tile;
+        }
+    }
+
+    private static TileBase ResolveStoredTile(_Tile tile)
+    {
+        if (tile == null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(tile.TileObjectPath))
+        {
+            TileBase assetTile = AssetDatabase.LoadAssetAtPath<TileBase>(tile.TileObjectPath);
+            if (assetTile != null)
+            {
+                return assetTile;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(tile.TileName))
+        {
+            TileBase resourceTile = LoadTileFromResources(tile.TileName);
+            if (resourceTile != null)
+            {
+                return resourceTile;
+            }
+        }
+
+        return null;
+    }
+
+    private static TileBase LoadTileFromResources(string resourceName)
+    {
+        if (string.IsNullOrEmpty(resourceName))
+        {
+            return null;
+        }
+
+        TileBase tile = Resources.Load<TileBase>(resourceName);
+        if (tile != null)
+        {
+            return tile;
+        }
+
+        tile = Resources.Load<Tile>(resourceName);
+        if (tile != null)
+        {
+            return tile;
+        }
+
+        RuleTile ruleTile = Resources.Load<RuleTile>(resourceName);
+        if (ruleTile != null)
+        {
+            return ruleTile;
+        }
+
+        if (resourceName.StartsWith("MapPallet/", StringComparison.OrdinalIgnoreCase) &&
+            !resourceName.StartsWith("MapPallet/Grass/", StringComparison.OrdinalIgnoreCase))
+        {
+            string candidate = resourceName.Insert("MapPallet/".Length, "Grass/");
+            tile = Resources.Load<TileBase>(candidate);
+            if (tile != null)
+            {
+                return tile;
+            }
+
+            ruleTile = Resources.Load<RuleTile>(candidate);
+            if (ruleTile != null)
+            {
+                return ruleTile;
+            }
+        }
+
+        return null;
     }
 
     private static string ExtractMapIdFromGrid(GameObject gridObject)
