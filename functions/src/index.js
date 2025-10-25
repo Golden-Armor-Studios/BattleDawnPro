@@ -157,6 +157,7 @@ function validateChunk(chunk, chunkSize) {
     const tileObjectPath = tile.tileObjectPath ?? tile.TileObjectPath;
     const rawLayer = tile.tileLayer ?? tile.TileLayer;
     const tileLayer = typeof rawLayer === "string" && rawLayer.trim().length > 0 ? rawLayer.trim() : "Overlay";
+    const transform = tile.transform ?? tile.Transform ?? null;
 
     if (typeof x !== "number" || typeof y !== "number") {
       throw new functions.https.HttpsError("invalid-argument", `Chunk '${id}' has tiles without numeric coordinates.`);
@@ -174,6 +175,15 @@ function validateChunk(chunk, chunkSize) {
         "invalid-argument",
         `Chunk '${id}' contains tiles with invalid tileName or tileObjectPath values.`
       );
+    }
+
+    if (transform !== null) {
+      if (!Array.isArray(transform) || transform.length !== 16 || transform.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          `Chunk '${id}' contains tiles with an invalid transform array.`
+        );
+      }
     }
   }
 
@@ -301,12 +311,15 @@ const saveMap = functions
         const tileObjectPath = tile.tileObjectPath ?? tile.TileObjectPath ?? null;
         const rawLayer = tile.tileLayer ?? tile.TileLayer;
         const layer = typeof rawLayer === "string" && rawLayer.trim().length > 0 ? rawLayer.trim() : "Overlay";
+        const transform = tile.transform ?? tile.Transform ?? null;
+        const normalizedTransform = Array.isArray(transform) && transform.length === 16 ? transform.map((value) => Number(value)) : null;
         return {
           x,
           y,
           TileName: tileName,
           TileObjectPath: tileObjectPath,
-          TileLayer: layer
+          TileLayer: layer,
+          Transform: normalizedTransform
         };
       });
       sanitizedChunks.push({id: chunk.id, tiles: tilesArray});
@@ -562,13 +575,18 @@ const processMapTileTask = functions
       const tileLayerValue = entry.TileLayer ?? entry.tileLayer ?? "Surface";
       const tileNameValue = entry.TileName ?? entry.tileName ?? null;
       const tileObjectPathValue = entry.TileObjectPath ?? entry.tileObjectPath ?? null;
+      const transformValue = entry.Transform ?? entry.transform ?? null;
+      const normalizedTransform = Array.isArray(transformValue) && transformValue.length === 16
+        ? transformValue.map((value) => Number(value))
+        : null;
 
       normalizedTiles.push({
         x,
         y,
         TileLayer: tileLayerValue,
         TileName: tileNameValue,
-        TileObjectPath: tileObjectPathValue
+        TileObjectPath: tileObjectPathValue,
+        Transform: normalizedTransform
       });
     }
 

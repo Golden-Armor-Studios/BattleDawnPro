@@ -459,11 +459,13 @@ public class Map {
             int applied = 0;
             int totalToApply = tilesToApply.Count;
             foreach (_Tile tile in tilesToApply) {
+                var cellPosition = new Vector3Int(tile.x, tile.y, 0);
                 TileBase clearedTile = ResolveStoredTile(tile);
                 if (clearedTile == null) {
                     Debug.LogWarning($"Unable to resolve tile '{tile.TileName}' (asset '{tile.TileObjectPath}').");
                 } else {
-                    ClearedGroundTilemap.SetTile(new Vector3Int(tile.x,tile.y,0), clearedTile);
+                    ClearedGroundTilemap.SetTile(cellPosition, clearedTile);
+                    ApplyStoredTransform(ClearedGroundTilemap, cellPosition, tile.Transform);
                 }
 
                 applied++;
@@ -594,7 +596,7 @@ public class Map {
             var chunks = new Dictionary<Vector2Int, List<_Tile>>();
             int totalTiles = 0;
 
-            void AddTile(Vector3Int cell, TileBase tileBase, string tileLayer)
+            void AddTile(Vector3Int cell, TileBase tileBase, string tileLayer, Tilemap sourceTilemap)
             {
                 if (tileBase == null)
                 {
@@ -604,6 +606,12 @@ public class Map {
                 string resourcePath = ResolveTileResourcePath(tileBase);
                 string assetPath = ResolveTileAssetPath(tileBase);
                 string serializedName = !string.IsNullOrEmpty(resourcePath) ? resourcePath : tileBase.name;
+
+                List<double> transform = null;
+                if (TrySerializeTransform(sourceTilemap, cell, out var serializedTransform))
+                {
+                    transform = serializedTransform;
+                }
 
                 var coord = new Vector2Int(Mathf.FloorToInt((float)cell.x / chunkSize), Mathf.FloorToInt((float)cell.y / chunkSize));
                 if (!chunks.TryGetValue(coord, out var tiles))
@@ -617,6 +625,7 @@ public class Map {
                     TileName = serializedName,
                     TileObjectPath = assetPath,
                     TileLayer = tileLayer,
+                    Transform = transform,
                     x = cell.x,
                     y = cell.y
                 });
@@ -638,7 +647,7 @@ public class Map {
                     {
                         continue;
                     }
-                    AddTile(cell, tileBase, "Overlay");
+                    AddTile(cell, tileBase, "Overlay", clearedGroundTilemap);
                 }
             }
 
@@ -673,14 +682,21 @@ public class Map {
                 var tiles = new List<Dictionary<string, object>>();
                 foreach (var tile in kvp.Value)
                 {
-                    tiles.Add(new Dictionary<string, object>
+                    var tilePayload = new Dictionary<string, object>
                     {
                         {"x", tile.x},
                         {"y", tile.y},
                         {"TileName", tile.TileName},
                         {"TileObjectPath", tile.TileObjectPath ?? (object)null},
                         {"TileLayer", string.IsNullOrEmpty(tile.TileLayer) ? "Overlay" : tile.TileLayer}
-                    });
+                    };
+
+                    if (tile.Transform != null && tile.Transform.Count == 16)
+                    {
+                        tilePayload["transform"] = tile.Transform;
+                    }
+
+                    tiles.Add(tilePayload);
                 }
 
                 var payload = new Dictionary<string, object>
@@ -1013,6 +1029,102 @@ public class Map {
         return null;
     }
 
+    private static void ApplyStoredTransform(Tilemap tilemap, Vector3Int cell, List<double> transform)
+    {
+        if (tilemap == null)
+        {
+            return;
+        }
+
+        tilemap.SetTileFlags(cell, TileFlags.None);
+
+        if (transform != null && transform.Count == 16 && TryDeserializeTransform(transform, out var matrix) && !IsIdentityMatrix(matrix))
+        {
+            tilemap.SetTransformMatrix(cell, matrix);
+        }
+        else
+        {
+            tilemap.SetTransformMatrix(cell, Matrix4x4.identity);
+        }
+    }
+
+    private static bool TrySerializeTransform(Tilemap tilemap, Vector3Int cell, out List<double> serialized)
+    {
+        serialized = null;
+        if (tilemap == null)
+        {
+            return false;
+        }
+
+        Matrix4x4 matrix = tilemap.GetTransformMatrix(cell);
+        if (IsIdentityMatrix(matrix))
+        {
+            return false;
+        }
+
+        serialized = SerializeMatrix(matrix);
+        return true;
+    }
+
+    private static bool IsIdentityMatrix(Matrix4x4 matrix, float epsilon = 0.0001f)
+    {
+        return Mathf.Abs(matrix.m00 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m11 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m22 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m33 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m01) < epsilon &&
+               Mathf.Abs(matrix.m02) < epsilon &&
+               Mathf.Abs(matrix.m03) < epsilon &&
+               Mathf.Abs(matrix.m10) < epsilon &&
+               Mathf.Abs(matrix.m12) < epsilon &&
+               Mathf.Abs(matrix.m13) < epsilon &&
+               Mathf.Abs(matrix.m20) < epsilon &&
+               Mathf.Abs(matrix.m21) < epsilon &&
+               Mathf.Abs(matrix.m23) < epsilon &&
+               Mathf.Abs(matrix.m30) < epsilon &&
+               Mathf.Abs(matrix.m31) < epsilon &&
+               Mathf.Abs(matrix.m32) < epsilon;
+    }
+
+    private static List<double> SerializeMatrix(Matrix4x4 matrix)
+    {
+        return new List<double>
+        {
+            matrix.m00, matrix.m01, matrix.m02, matrix.m03,
+            matrix.m10, matrix.m11, matrix.m12, matrix.m13,
+            matrix.m20, matrix.m21, matrix.m22, matrix.m23,
+            matrix.m30, matrix.m31, matrix.m32, matrix.m33
+        };
+    }
+
+    private static bool TryDeserializeTransform(IList<double> values, out Matrix4x4 matrix)
+    {
+        matrix = Matrix4x4.identity;
+        if (values == null || values.Count != 16)
+        {
+            return false;
+        }
+
+        matrix.m00 = (float)values[0];
+        matrix.m01 = (float)values[1];
+        matrix.m02 = (float)values[2];
+        matrix.m03 = (float)values[3];
+        matrix.m10 = (float)values[4];
+        matrix.m11 = (float)values[5];
+        matrix.m12 = (float)values[6];
+        matrix.m13 = (float)values[7];
+        matrix.m20 = (float)values[8];
+        matrix.m21 = (float)values[9];
+        matrix.m22 = (float)values[10];
+        matrix.m23 = (float)values[11];
+        matrix.m30 = (float)values[12];
+        matrix.m31 = (float)values[13];
+        matrix.m32 = (float)values[14];
+        matrix.m33 = (float)values[15];
+
+        return true;
+    }
+
     private static string ExtractMapIdFromGrid(GameObject gridObject)
     {
         if (gridObject == null)
@@ -1069,6 +1181,8 @@ public class _Tile {
         public string TileObjectPath { get; set; }
     [FirestoreProperty]
         public string TileLayer { get; set; }
+    [FirestoreProperty]
+        public List<double> Transform { get; set; }
     [FirestoreProperty]
         public int x{ get; set; }
     [FirestoreProperty]

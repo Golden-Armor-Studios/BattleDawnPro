@@ -11,6 +11,9 @@ GameObject:
   - component: {fileID: 3158718919716620113}
   - component: {fileID: 2065002382160645508}
   - component: {fileID: 5942583569689620500}
+  - component: {fileID: -7475961769091954420}
+  - component: {fileID: 1021448999168108674}
+  - component: {fileID: -7944384317383231015}
   m_Layer: 0
   m_Name: GalacticEmpireTile
   m_TagString: Untagged
@@ -113,3 +116,59 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
+--- !u!114 &-7475961769091954420
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7712574416624712386}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e741851cba3ad425c91ecf922cc6b379, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.VisualScripting.Core::Unity.VisualScripting.Variables
+  _data:
+    _json: '{"declarations":{"Kind":"Object","collection":{"$content":[],"$version":"A"},"$version":"A"}}'
+    _objectReferences: []
+--- !u!65 &1021448999168108674
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7712574416624712386}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Size: {x: 0.84765625, y: 0.8574219, z: 0.2}
+  m_Center: {x: 0.0087890625, y: -0.00390625, z: 0}
+--- !u!114 &-7944384317383231015
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7712574416624712386}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 046903e7de376408a8489192952fb476, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::StarSystemControlller
+  onClicked:
+    m_PersistentCalls:
+      m_Calls: []
+  systemName: 
+  playWarpTravelVideo: 1
+  warpTravelClip: {fileID: 32900000, guid: cd705003a54804f86b2c37fa69c88121, type: 3}
+  warpVideoCameraObject: {fileID: 0}
+  warpToMapName: -OcDcXxOnE3IO0-

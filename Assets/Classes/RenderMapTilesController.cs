@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.Tilemaps;
 using static MapTileLayers;
 using Auth;
+using System.Linq;
 
 [DisallowMultipleComponent]
 [RequireComponent(typeof(Camera))]
@@ -144,11 +145,12 @@ public class RenderMapTilesController : MonoBehaviour
         }
     }
 
-    public async Task LoadMapAsync(string explicitMapId = null)
+    public async Task<bool> LoadMapAsync(string explicitMapId = null)
     {
         if (isLoading)
         {
-            return;
+            Debug.LogWarning("Map load already in progress; skipping additional request.");
+            return false;
         }
 
         if (!string.IsNullOrEmpty(explicitMapId))
@@ -159,28 +161,17 @@ public class RenderMapTilesController : MonoBehaviour
         if (string.IsNullOrEmpty(mapId))
         {
             Debug.LogWarning($"{nameof(RenderMapTilesController)} cannot load map data because no map id was provided.");
-            return;
+            return false;
         }
 
-        DB.Default.Init();
-        if (DB.Default.maps == null || DB.Default.MapData == null)
+        if (!await EnsureFirestoreReadyAsync())
         {
-            var authenticatedUser = await User.EnsureLoggedInAsync();
-            if (authenticatedUser == null)
-            {
-                Debug.LogError("Firestore map collections are not initialised. Sign in before loading map tiles.");
-                return;
-            }
-
-            DB.Default.Init();
-            if (DB.Default.maps == null || DB.Default.MapData == null)
-            {
-                Debug.LogError("Firestore map collections are not initialised. Sign in before loading map tiles.");
-                return;
-            }
+            return false;
         }
 
         isLoading = true;
+        mapLoaded = false;
+        bool success = false;
 
         try
         {
@@ -188,7 +179,7 @@ public class RenderMapTilesController : MonoBehaviour
             if (!mapSnapshot.Exists)
             {
                 Debug.LogWarning($"Map document '{mapId}' was not found.");
-                return;
+                return false;
             }
 
             var mapDocument = mapSnapshot.ConvertTo<FirestoreMapDocument>();
@@ -230,6 +221,7 @@ public class RenderMapTilesController : MonoBehaviour
             lastCameraPosition = Vector3.positiveInfinity;
             lastOrthographicSize = float.NaN;
             UpdateVisibleTiles(force: true);
+            success = true;
         }
         catch (Exception ex)
         {
@@ -239,6 +231,89 @@ public class RenderMapTilesController : MonoBehaviour
         {
             isLoading = false;
         }
+
+        return success;
+    }
+
+    public async Task<bool> LoadMapByNameAsync(string mapName)
+    {
+        if (isLoading)
+        {
+            Debug.LogWarning("A map load is already running. Warp request will be ignored.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            Debug.LogWarning("Cannot warp to an empty map name.");
+            return false;
+        }
+
+        if (!await EnsureFirestoreReadyAsync())
+        {
+            return false;
+        }
+
+        try
+        {
+            string trimmedName = mapName.Trim();
+
+            // First allow direct map id usage.
+            var directSnapshot = await DB.Default.maps.Document(trimmedName).GetSnapshotAsync();
+            DocumentSnapshot targetDocument = directSnapshot.Exists ? directSnapshot : null;
+
+            if (targetDocument == null)
+            {
+                Query query = DB.Default.maps.WhereEqualTo("PlanetName", trimmedName).Limit(1);
+                QuerySnapshot snapshot = await query.GetSnapshotAsync();
+                targetDocument = snapshot?.Documents?.FirstOrDefault(doc => doc.Exists);
+            }
+
+            if (targetDocument == null || !targetDocument.Exists)
+            {
+                Debug.LogWarning($"Map with name or id '{trimmedName}' was not found in Firestore.");
+                return false;
+            }
+
+            Debug.Log($"Warp loading map '{trimmedName}' (document id '{targetDocument.Id}').");
+
+            bool loaded = await LoadMapAsync(targetDocument.Id);
+            if (!loaded)
+            {
+                Debug.LogWarning($"Map '{trimmedName}' was found but failed to load.");
+            }
+            return loaded;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Failed to load map by name '{mapName}'. {ex}");
+            return false;
+        }
+    }
+
+    private async Task<bool> EnsureFirestoreReadyAsync()
+    {
+        DB.Default.Init();
+        if (DB.Default.maps != null && DB.Default.MapData != null)
+        {
+            return true;
+        }
+
+        var authenticatedUser = await User.EnsureLoggedInAsync();
+        if (authenticatedUser == null)
+        {
+            Debug.LogError("Firestore map collections are not initialised. Sign in before loading map tiles.");
+            return false;
+        }
+
+        DB.Default.Init();
+        if (DB.Default.maps == null || DB.Default.MapData == null)
+        {
+            Debug.LogError("Firestore map collections are not initialised. Sign in before loading map tiles.");
+            return false;
+        }
+
+        return true;
     }
 
     private async Task LoadChunksAsync(IReadOnlyList<string> chunkIds)
@@ -370,6 +445,7 @@ public class RenderMapTilesController : MonoBehaviour
                     if (baseTile != null)
                     {
                         surfaceTilemap.SetTile(cell, baseTile);
+                        ApplyTileTransform(surfaceTilemap, cell, null);
                         activeSurfaceCells.Add(cell);
                     }
 
@@ -382,6 +458,7 @@ public class RenderMapTilesController : MonoBehaviour
                         if (surfaceOverride != null)
                         {
                             surfaceTilemap.SetTile(cell, surfaceOverride);
+                            ApplyTileTransform(surfaceTilemap, cell, null);
                             activeSurfaceCells.Add(cell);
                         }
                     }
@@ -393,17 +470,21 @@ public class RenderMapTilesController : MonoBehaviour
                         if (overlayTile != null)
                         {
                             overlayTilemap.SetTile(cell, overlayTile);
+                            Matrix4x4? transform = (tileData != null && tileData.HasOverlayTransform) ? tileData.OverlayTransform : (Matrix4x4?)null;
+                            ApplyTileTransform(overlayTilemap, cell, transform);
                             activeOverlayCells.Add(cell);
                         }
                         else
                         {
                             overlayTilemap.SetTile(cell, null);
+                            ApplyTileTransform(overlayTilemap, cell, null);
                             activeOverlayCells.Remove(cell);
                         }
                     }
                     else
                     {
                         overlayTilemap.SetTile(cell, null);
+                        ApplyTileTransform(overlayTilemap, cell, null);
                         activeOverlayCells.Remove(cell);
                     }
 
@@ -555,6 +636,56 @@ public class RenderMapTilesController : MonoBehaviour
         return resourcePath;
     }
 
+    private static Matrix4x4? DecodeTransform(IList<double> values)
+    {
+        if (values == null || values.Count != 16)
+        {
+            return null;
+        }
+
+        var matrix = new Matrix4x4
+        {
+            m00 = (float)values[0],
+            m01 = (float)values[1],
+            m02 = (float)values[2],
+            m03 = (float)values[3],
+            m10 = (float)values[4],
+            m11 = (float)values[5],
+            m12 = (float)values[6],
+            m13 = (float)values[7],
+            m20 = (float)values[8],
+            m21 = (float)values[9],
+            m22 = (float)values[10],
+            m23 = (float)values[11],
+            m30 = (float)values[12],
+            m31 = (float)values[13],
+            m32 = (float)values[14],
+            m33 = (float)values[15]
+        };
+
+        return IsIdentityMatrix(matrix) ? (Matrix4x4?)null : matrix;
+    }
+
+    private static bool IsIdentityMatrix(Matrix4x4 matrix, float epsilon = 0.0001f)
+    {
+        return Mathf.Abs(matrix.m00 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m11 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m22 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m33 - 1f) < epsilon &&
+               Mathf.Abs(matrix.m01) < epsilon &&
+               Mathf.Abs(matrix.m02) < epsilon &&
+               Mathf.Abs(matrix.m03) < epsilon &&
+               Mathf.Abs(matrix.m10) < epsilon &&
+               Mathf.Abs(matrix.m12) < epsilon &&
+               Mathf.Abs(matrix.m13) < epsilon &&
+               Mathf.Abs(matrix.m20) < epsilon &&
+               Mathf.Abs(matrix.m21) < epsilon &&
+               Mathf.Abs(matrix.m23) < epsilon &&
+               Mathf.Abs(matrix.m30) < epsilon &&
+               Mathf.Abs(matrix.m31) < epsilon &&
+               Mathf.Abs(matrix.m32) < epsilon;
+    }
+
     private static bool IsSurfaceLayer(string layer)
     {
         return !string.IsNullOrEmpty(layer) && string.Equals(layer, Surface, StringComparison.OrdinalIgnoreCase);
@@ -577,6 +708,7 @@ public class RenderMapTilesController : MonoBehaviour
         var layer = string.IsNullOrEmpty(tile.TileLayer) ? Overlay : tile.TileLayer;
         var tilePath = NormalizeResourcePath(tile.TileName);
         var objectPath = NormalizeResourcePath(tile.TileObjectPath);
+        var transform = DecodeTransform(tile.Transform);
 
         if (IsSurfaceLayer(layer))
         {
@@ -590,6 +722,16 @@ public class RenderMapTilesController : MonoBehaviour
             if (!string.IsNullOrEmpty(tilePath))
             {
                 data.OverlayTilePath = tilePath;
+            }
+            if (transform.HasValue)
+            {
+                data.HasOverlayTransform = true;
+                data.OverlayTransform = transform.Value;
+            }
+            else
+            {
+                data.HasOverlayTransform = false;
+                data.OverlayTransform = Matrix4x4.identity;
             }
             data.ObjectPath = objectPath;
         }
@@ -615,6 +757,17 @@ public class RenderMapTilesController : MonoBehaviour
 
         objectCache[resourcePath] = prefab;
         return prefab;
+    }
+
+    private static void ApplyTileTransform(Tilemap tilemap, Vector3Int cell, Matrix4x4? matrix)
+    {
+        if (tilemap == null)
+        {
+            return;
+        }
+
+        tilemap.SetTileFlags(cell, TileFlags.None);
+        tilemap.SetTransformMatrix(cell, matrix ?? Matrix4x4.identity);
     }
 
     private void UpdateTileObject(Vector3Int cell, string resourcePath)
@@ -778,6 +931,8 @@ public class RenderMapTilesController : MonoBehaviour
         public string SurfaceTilePath;
         public string OverlayTilePath;
         public string ObjectPath;
+        public bool HasOverlayTransform;
+        public Matrix4x4 OverlayTransform;
     }
 
     private class ActiveTileObject
@@ -855,6 +1010,9 @@ public class RenderMapTilesController : MonoBehaviour
 
         [FirestoreProperty]
         public int y { get; set; }
+
+        [FirestoreProperty]
+        public List<double> Transform { get; set; }
     }
 
     #endregion

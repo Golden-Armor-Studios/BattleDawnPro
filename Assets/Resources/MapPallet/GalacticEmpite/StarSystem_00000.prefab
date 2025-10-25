@@ -11,8 +11,8 @@ GameObject:
   - component: {fileID: 2025426871722900977}
   - component: {fileID: 5129715143031734533}
   - component: {fileID: 4690641670885445912}
-  - component: {fileID: -5698535949396538392}
   - component: {fileID: 6361583462096978607}
+  - component: {fileID: 1656180225133597576}
   m_Layer: 0
   m_Name: StarSystem_00000
   m_TagString: Untagged
@@ -115,52 +115,6 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
---- !u!61 &-5698535949396538392
-BoxCollider2D:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4132370950564811841}
-  m_Enabled: 1
-  serializedVersion: 3
-  m_Density: 1
-  m_Material: {fileID: 0}
-  m_IncludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ExcludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_LayerOverridePriority: 0
-  m_ForceSendLayers:
-    serializedVersion: 2
-    m_Bits: 4294967295
-  m_ForceReceiveLayers:
-    serializedVersion: 2
-    m_Bits: 4294967295
-  m_ContactCaptureLayers:
-    serializedVersion: 2
-    m_Bits: 4294967295
-  m_CallbackLayers:
-    serializedVersion: 2
-    m_Bits: 4294967295
-  m_IsTrigger: 0
-  m_UsedByEffector: 0
-  m_CompositeOperation: 0
-  m_CompositeOrder: 0
-  m_Offset: {x: 0, y: 0}
-  m_SpriteTilingProperty:
-    border: {x: 0, y: 0, z: 0, w: 0}
-    pivot: {x: 0.5, y: 0.5}
-    oldSize: {x: 1, y: 1}
-    newSize: {x: 1, y: 1}
-    adaptiveTilingThreshold: 0.5
-    drawMode: 0
-    adaptiveTiling: 0
-  m_AutoTiling: 0
-  m_Size: {x: 1, y: 1}
-  m_EdgeRadius: 0
 --- !u!114 &6361583462096978607
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -170,7 +124,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 4132370950564811841}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 792d46772efe14f71831cac18f64858a, type: 3}
+  m_Script: {fileID: 11500000, guid: 046903e7de376408a8489192952fb476, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
   onClicked:
@@ -180,3 +134,25 @@ MonoBehaviour:
   playWarpTravelVideo: 1
   warpTravelClip: {fileID: 32900000, guid: f19864b689c41461baf5b446e90f92a6, type: 3}
   warpVideoCameraObject: {fileID: 0}
+  warpToMapName: -OcHxWPUr-YgS2B
+--- !u!65 &1656180225133597576
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4132370950564811841}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Size: {x: 1, y: 1, z: 0.2}
+  m_Center: {x: 0, y: 0, z: 0}

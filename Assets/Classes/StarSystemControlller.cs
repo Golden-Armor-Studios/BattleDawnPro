@@ -3,6 +3,8 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.Video;
+using System;
+using System.Threading.Tasks;
 
 [RequireComponent(typeof(Collider))]
 public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
@@ -27,6 +29,11 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
     [Tooltip("Optional override for the camera used to render the video. Defaults to Camera.main.")]
     [SerializeField]
     private GameObject warpVideoCameraObject;
+
+    [Header("Warp Destination")]
+    [Tooltip("Map name to load after the warp video finishes playing.")]
+    [SerializeField]
+    private string warpToMapName;
 
     private const string WarpVideoPlayerObjectName = "WarpTravelVideoPlayer";
 
@@ -89,16 +96,18 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
             return;
         }
 
-        if (playWarpTravelVideo)
-        {
-            PlayWarpTravelVideo();
-        }
+        bool startedVideo = playWarpTravelVideo && PlayWarpTravelVideo();
 
         Debug.Log(string.IsNullOrEmpty(systemName)
             ? $"Star system clicked: {gameObject.name}"
             : $"Star system clicked: {systemName}");
 
         onClicked?.Invoke();
+
+        if (!startedVideo)
+        {
+            WarpToDestinationIfConfigured();
+        }
     }
 
     public void RegisterClickListener(UnityAction action)
@@ -126,16 +135,17 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
         UnhookVideoPlayerEvents();
     }
 
-    private void PlayWarpTravelVideo()
+    private bool PlayWarpTravelVideo()
     {
         EnsureVideoPlayer();
         LoadWarpTravelClip();
         if (warpTravelClip == null || warpVideoPlaying)
         {
-            return;
+            return false;
         }
 
         StartCoroutine(PlayWarpTravelVideoRoutine());
+        return true;
     }
 
     private IEnumerator PlayWarpTravelVideoRoutine()
@@ -330,10 +340,49 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
     {
         Debug.LogError($"Warp travel video error on {gameObject.name}: {message}");
         StopWarpTravelVideo();
+        WarpToDestinationIfConfigured();
     }
 
     private void OnWarpVideoFinished(VideoPlayer source)
     {
         StopWarpTravelVideo();
+        WarpToDestinationIfConfigured();
+    }
+
+    private void WarpToDestinationIfConfigured()
+    {
+        if (string.IsNullOrWhiteSpace(warpToMapName))
+        {
+            return;
+        }
+
+        WarpToMapAsync(warpToMapName.Trim());
+    }
+
+    private async void WarpToMapAsync(string mapName)
+    {
+        try
+        {
+            var controller = FindObjectOfType<RenderMapTilesController>();
+            if (controller == null)
+            {
+                Debug.LogWarning($"Warp target '{mapName}' requested but no {nameof(RenderMapTilesController)} is active in the scene.");
+                return;
+            }
+
+            bool loaded = await controller.LoadMapByNameAsync(mapName);
+            if (!loaded)
+            {
+                Debug.LogWarning($"Warp target '{mapName}' could not be loaded from Firestore.");
+            }
+            else
+            {
+                Debug.Log($"Warped to map '{mapName}'.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error warping to map '{mapName}': {ex}");
+        }
     }
 }
