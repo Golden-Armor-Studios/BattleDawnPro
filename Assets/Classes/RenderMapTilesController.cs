@@ -75,6 +75,8 @@ public class RenderMapTilesController : MonoBehaviour
     private readonly HashSet<Vector3Int> activeOverlayCells = new HashSet<Vector3Int>();
     private readonly Dictionary<Vector3Int, ActiveTileObject> activeTileObjects = new Dictionary<Vector3Int, ActiveTileObject>();
     private readonly List<Vector3Int> scratchCells = new List<Vector3Int>();
+    private readonly Dictionary<string, MapCacheEntry> mapCache = new Dictionary<string, MapCacheEntry>(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CameraOverride> cameraOverrides = new Dictionary<string, CameraOverride>(StringComparer.OrdinalIgnoreCase);
 
     private BoundsInt currentViewBounds;
     private string baseTilePath;
@@ -84,6 +86,10 @@ public class RenderMapTilesController : MonoBehaviour
     private Vector3 lastCameraPosition = Vector3.positiveInfinity;
     private float lastOrthographicSize = float.NaN;
     private bool cameraPositioned;
+    private string activeMapId;
+    private MapCacheEntry activeCacheEntry;
+    private CameraOverride? activeCameraOverride;
+    private bool mapVisible = true;
 
     private static readonly int SurfaceSortingOrder = 0;
     private static readonly int OverlaySortingOrder = 1;
@@ -131,7 +137,7 @@ public class RenderMapTilesController : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (!mapLoaded || targetCamera == null)
+        if (!mapLoaded || targetCamera == null || !mapVisible)
         {
             return;
         }
@@ -158,7 +164,8 @@ public class RenderMapTilesController : MonoBehaviour
             mapId = explicitMapId;
         }
 
-        if (string.IsNullOrEmpty(mapId))
+        string targetMapId = mapId?.Trim();
+        if (string.IsNullOrEmpty(targetMapId))
         {
             Debug.LogWarning($"{nameof(RenderMapTilesController)} cannot load map data because no map id was provided.");
             return false;
@@ -170,32 +177,50 @@ public class RenderMapTilesController : MonoBehaviour
         }
 
         isLoading = true;
-        mapLoaded = false;
         bool success = false;
 
         try
         {
-            var mapSnapshot = await DB.Default.maps.Document(mapId).GetSnapshotAsync();
+            EnsureTileInfrastructure();
+            ResetRuntimeState();
+
+            activeMapId = targetMapId;
+            activeCameraOverride = GetCameraOverrideFor(targetMapId);
+
+            if (mapCache.TryGetValue(targetMapId, out var cachedEntry))
+            {
+                ApplyCacheEntry(cachedEntry);
+                if (mapVisible)
+                {
+                    UpdateVisibleTiles(force: true);
+                }
+                else
+                {
+                    lastCameraPosition = Vector3.positiveInfinity;
+                    lastOrthographicSize = float.NaN;
+                }
+                success = true;
+                return success;
+            }
+
+            var mapSnapshot = await DB.Default.maps.Document(targetMapId).GetSnapshotAsync();
             if (!mapSnapshot.Exists)
             {
-                Debug.LogWarning($"Map document '{mapId}' was not found.");
+                Debug.LogWarning($"Map document '{targetMapId}' was not found.");
                 return false;
             }
 
             var mapDocument = mapSnapshot.ConvertTo<FirestoreMapDocument>();
+            if (mapDocument != null && !string.IsNullOrWhiteSpace(mapDocument.PlanetName))
+            {
+                SyncCameraOverrideKeys(mapDocument.PlanetName, targetMapId);
+                activeCameraOverride = GetCameraOverrideFor(targetMapId);
+            }
             planetSize = Mathf.Max(0, mapDocument?.PlanetSize ?? 0);
             baseTilePath = NormalizeResourcePath(mapDocument?.PlanetSurface) ?? mapDocument?.PlanetSurface ?? string.Empty;
             cachedBaseTile = null;
 
-            ClearActiveTileObjects();
-            overrideTiles.Clear();
-            tileCache.Clear();
-            objectCache.Clear();
-            activeSurfaceCells.Clear();
-            activeOverlayCells.Clear();
-            currentViewBounds = default;
-
-            var mapDataSnapshot = await DB.Default.MapData.Document(mapId).GetSnapshotAsync();
+            var mapDataSnapshot = await DB.Default.MapData.Document(targetMapId).GetSnapshotAsync();
             if (mapDataSnapshot.Exists)
             {
                 var mapData = mapDataSnapshot.ConvertTo<FirestoreMapDataDocument>();
@@ -220,12 +245,17 @@ public class RenderMapTilesController : MonoBehaviour
             cameraPositioned = false;
             lastCameraPosition = Vector3.positiveInfinity;
             lastOrthographicSize = float.NaN;
-            UpdateVisibleTiles(force: true);
+            if (mapVisible)
+            {
+                UpdateVisibleTiles(force: true);
+            }
+            CacheCurrentMap(targetMapId, mapDocument?.PlanetName);
             success = true;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Failed to load map '{mapId}'. {ex}");
+            Debug.LogError($"Failed to load map '{targetMapId}'. {ex}");
+            ResetRuntimeState();
         }
         finally
         {
@@ -276,6 +306,7 @@ public class RenderMapTilesController : MonoBehaviour
             }
 
             Debug.Log($"Warp loading map '{trimmedName}' (document id '{targetDocument.Id}').");
+            SyncCameraOverrideKeys(trimmedName, targetDocument.Id);
 
             bool loaded = await LoadMapAsync(targetDocument.Id);
             if (!loaded)
@@ -288,6 +319,132 @@ public class RenderMapTilesController : MonoBehaviour
         {
             Debug.LogError($"Failed to load map by name '{mapName}'. {ex}");
             return false;
+        }
+    }
+
+    public void SetMapVisibility(bool visible)
+    {
+        mapVisible = visible;
+        ApplyMapVisibility(visible);
+
+        if (visible && mapLoaded)
+        {
+            lastCameraPosition = Vector3.positiveInfinity;
+            lastOrthographicSize = float.NaN;
+            UpdateVisibleTiles(force: true);
+        }
+    }
+
+    private void ApplyMapVisibility(bool visible)
+    {
+        EnsureTileInfrastructure();
+
+        if (grid != null)
+        {
+            grid.enabled = visible;
+        }
+
+        if (surfaceTilemap != null)
+        {
+            surfaceTilemap.gameObject.SetActive(visible);
+        }
+
+        if (overlayTilemap != null)
+        {
+            overlayTilemap.gameObject.SetActive(visible);
+        }
+
+        foreach (var kvp in activeTileObjects)
+        {
+            if (kvp.Value?.Instance != null)
+            {
+                kvp.Value.Instance.SetActive(visible);
+            }
+        }
+    }
+
+    public void SetMapCameraOverride(string mapIdentifier, Vector3 worldPosition, float orthographicSize)
+    {
+        if (string.IsNullOrWhiteSpace(mapIdentifier) || orthographicSize <= 0f)
+        {
+            return;
+        }
+
+        string key = mapIdentifier.Trim();
+        var overrideData = new CameraOverride
+        {
+            Position = worldPosition,
+            Size = ClampCameraSize(Mathf.Max(orthographicSize, 0.01f))
+        };
+
+        cameraOverrides[key] = overrideData;
+
+        foreach (var entry in mapCache.Values)
+        {
+            if (!string.IsNullOrEmpty(entry.MapName) && string.Equals(entry.MapName, key, StringComparison.OrdinalIgnoreCase))
+            {
+                cameraOverrides[entry.MapId] = overrideData;
+                entry.CameraStart = overrideData;
+            }
+            else if (!string.IsNullOrEmpty(entry.MapId) && string.Equals(entry.MapId, key, StringComparison.OrdinalIgnoreCase))
+            {
+                entry.CameraStart = overrideData;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(activeMapId) && string.Equals(activeMapId, key, StringComparison.OrdinalIgnoreCase))
+        {
+            activeCameraOverride = overrideData;
+            cameraPositioned = false;
+            UpdateVisibleTiles(force: true);
+        }
+        else if (!string.IsNullOrEmpty(activeMapId))
+        {
+            foreach (var entry in mapCache.Values)
+            {
+                if (!string.IsNullOrEmpty(entry.MapName) && string.Equals(entry.MapName, key, StringComparison.OrdinalIgnoreCase) && string.Equals(entry.MapId, activeMapId, StringComparison.OrdinalIgnoreCase))
+                {
+                    activeCameraOverride = overrideData;
+                    cameraPositioned = false;
+                    UpdateVisibleTiles(force: true);
+                    break;
+                }
+            }
+        }
+    }
+
+    public void ClearMapCameraOverride(string mapIdentifier)
+    {
+        if (string.IsNullOrWhiteSpace(mapIdentifier))
+        {
+            return;
+        }
+
+        string key = mapIdentifier.Trim();
+        cameraOverrides.Remove(key);
+
+        foreach (var entry in mapCache.Values)
+        {
+            if (!string.IsNullOrEmpty(entry.MapName) && string.Equals(entry.MapName, key, StringComparison.OrdinalIgnoreCase))
+            {
+                entry.CameraStart = null;
+                cameraOverrides.Remove(entry.MapId);
+            }
+
+            if (!string.IsNullOrEmpty(entry.MapId) && string.Equals(entry.MapId, key, StringComparison.OrdinalIgnoreCase))
+            {
+                entry.CameraStart = null;
+            }
+        }
+
+        bool affectsActive = (!string.IsNullOrEmpty(activeMapId) && string.Equals(activeMapId, key, StringComparison.OrdinalIgnoreCase))
+            || (activeCacheEntry != null && !string.IsNullOrEmpty(activeCacheEntry.MapName) && string.Equals(activeCacheEntry.MapName, key, StringComparison.OrdinalIgnoreCase));
+
+        if (affectsActive)
+        {
+            activeCameraOverride = null;
+            cameraPositioned = false;
+            UpdateVisibleTiles(force: true);
         }
     }
 
@@ -349,6 +506,37 @@ public class RenderMapTilesController : MonoBehaviour
                 UpsertTileVisualData(tile);
             }
         }
+    }
+
+    private void ResetRuntimeState()
+    {
+        ClearActiveTileObjects();
+        if (surfaceTilemap != null)
+        {
+            surfaceTilemap.ClearAllTiles();
+        }
+        if (overlayTilemap != null)
+        {
+            overlayTilemap.ClearAllTiles();
+        }
+
+        activeSurfaceCells.Clear();
+        activeOverlayCells.Clear();
+        overrideTiles.Clear();
+        tileCache.Clear();
+        objectCache.Clear();
+        currentViewBounds = default;
+        baseTilePath = null;
+        cachedBaseTile = null;
+        planetSize = 0;
+        chunkSize = DefaultChunkSize;
+        lastCameraPosition = Vector3.positiveInfinity;
+        lastOrthographicSize = float.NaN;
+        mapLoaded = false;
+        cameraPositioned = false;
+        activeMapId = null;
+        activeCacheEntry = null;
+        activeCameraOverride = null;
     }
 
     private void EnsureTileInfrastructure()
@@ -782,7 +970,7 @@ public class RenderMapTilesController : MonoBehaviour
         {
             if (active != null && active.Instance != null)
             {
-                Destroy(active.Instance);
+                DestroyRuntimeObject(active.Instance);
             }
 
             if (active != null)
@@ -800,7 +988,7 @@ public class RenderMapTilesController : MonoBehaviour
 
         if (active != null && active.Instance != null)
         {
-            Destroy(active.Instance);
+            DestroyRuntimeObject(active.Instance);
             activeTileObjects.Remove(cell);
         }
 
@@ -826,20 +1014,59 @@ public class RenderMapTilesController : MonoBehaviour
         {
             if (entry.Value?.Instance != null)
             {
-                Destroy(entry.Value.Instance);
+                DestroyRuntimeObject(entry.Value.Instance);
             }
         }
         activeTileObjects.Clear();
     }
 
-    private void MaybePositionCamera(BoundsInt visibleBounds)
+    private static void DestroyRuntimeObject(GameObject instance)
     {
-        if (cameraPositioned || targetCamera == null)
+        if (instance == null)
         {
             return;
         }
 
-        if (!TryGetMapExtents(out var worldCenter, out float mapWidth, out float mapHeight))
+        if (Application.isPlaying)
+        {
+            UnityEngine.Object.Destroy(instance);
+        }
+        else
+        {
+            UnityEngine.Object.DestroyImmediate(instance);
+        }
+    }
+
+    private void MaybePositionCamera(BoundsInt visibleBounds)
+    {
+        if (targetCamera == null)
+        {
+            return;
+        }
+
+        if (!cameraPositioned && activeCameraOverride.HasValue)
+        {
+            var overrideData = activeCameraOverride.Value;
+            var desiredPosition = overrideData.Position;
+            desiredPosition.z = targetCamera.transform.position.z;
+
+            targetCamera.transform.position = desiredPosition;
+            if (isOrthographic)
+            {
+                targetCamera.orthographicSize = ClampCameraSize(overrideData.Size);
+            }
+
+            cameraPositioned = true;
+            activeCameraOverride = null;
+            return;
+        }
+
+        if (cameraPositioned)
+        {
+            return;
+        }
+
+        if (!TryGetMapExtents(out var worldCenter, out _, out _))
         {
             if (visibleBounds.size.x == 0 || visibleBounds.size.y == 0)
             {
@@ -850,8 +1077,6 @@ public class RenderMapTilesController : MonoBehaviour
             float centerX = (visibleBounds.xMin + visibleBounds.xMax - 1) * tileSize * 0.5f + halfTile;
             float centerY = (visibleBounds.yMin + visibleBounds.yMax - 1) * tileSize * 0.5f + halfTile;
             worldCenter = new Vector3(centerX, centerY, 0f);
-            mapWidth = visibleBounds.size.x * tileSize;
-            mapHeight = visibleBounds.size.y * tileSize;
         }
 
         worldCenter.z = targetCamera.transform.position.z;
@@ -860,10 +1085,7 @@ public class RenderMapTilesController : MonoBehaviour
 
         if (isOrthographic)
         {
-            float desiredHalfHeight = Mathf.Max(mapHeight * 0.5f, minCameraSize);
-            float desiredHalfWidth = Mathf.Max(mapWidth * 0.5f, desiredHalfHeight * targetCamera.aspect);
-            float requiredSize = Mathf.Max(desiredHalfHeight, desiredHalfWidth / targetCamera.aspect);
-            targetCamera.orthographicSize = ClampCameraSize(requiredSize);
+            targetCamera.orthographicSize = ClampCameraSize(defaultCameraSize);
         }
 
         cameraPositioned = true;
@@ -926,6 +1148,142 @@ public class RenderMapTilesController : MonoBehaviour
         cameraPositioned = false;
     }
 
+    private struct CameraOverride
+    {
+        public Vector3 Position;
+        public float Size;
+    }
+
+    private CameraOverride? GetCameraOverrideFor(string mapIdentifier)
+    {
+        if (!string.IsNullOrEmpty(mapIdentifier) && cameraOverrides.TryGetValue(mapIdentifier, out var overrideData))
+        {
+            return overrideData;
+        }
+
+        if (!string.IsNullOrEmpty(mapIdentifier) && mapCache.TryGetValue(mapIdentifier, out var cached) && cached.CameraStart.HasValue)
+        {
+            return cached.CameraStart;
+        }
+
+        return null;
+    }
+
+    private static Dictionary<Vector2Int, TileVisualData> CloneOverrideTilesDictionary(Dictionary<Vector2Int, TileVisualData> source)
+    {
+        var clone = new Dictionary<Vector2Int, TileVisualData>(source.Count);
+        foreach (var kvp in source)
+        {
+            clone[kvp.Key] = kvp.Value?.Clone();
+        }
+        return clone;
+    }
+
+    private void CacheCurrentMap(string mapIdentifier, string displayName = null)
+    {
+        if (string.IsNullOrEmpty(mapIdentifier))
+        {
+            return;
+        }
+
+        var entry = new MapCacheEntry
+        {
+            MapId = mapIdentifier,
+            MapName = displayName ?? mapIdentifier,
+            BaseTilePath = baseTilePath,
+            CachedBaseTile = cachedBaseTile,
+            PlanetSize = planetSize,
+            ChunkSize = chunkSize,
+            OverrideTiles = CloneOverrideTilesDictionary(overrideTiles),
+            TileCache = new Dictionary<string, TileBase>(tileCache, StringComparer.OrdinalIgnoreCase),
+            ObjectCache = new Dictionary<string, GameObject>(objectCache, StringComparer.OrdinalIgnoreCase),
+            CameraStart = GetCameraOverrideFor(mapIdentifier)
+        };
+
+        mapCache[mapIdentifier] = entry;
+        activeCacheEntry = entry;
+
+        if (!string.IsNullOrEmpty(displayName))
+        {
+            SyncCameraOverrideKeys(displayName, mapIdentifier);
+        }
+    }
+
+    private void ApplyCacheEntry(MapCacheEntry entry)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+
+        foreach (var kvp in entry.OverrideTiles)
+        {
+            overrideTiles[kvp.Key] = kvp.Value?.Clone();
+        }
+
+        foreach (var kvp in entry.TileCache)
+        {
+            tileCache[kvp.Key] = kvp.Value;
+        }
+
+        foreach (var kvp in entry.ObjectCache)
+        {
+            objectCache[kvp.Key] = kvp.Value;
+        }
+
+        baseTilePath = entry.BaseTilePath;
+        cachedBaseTile = entry.CachedBaseTile;
+        planetSize = entry.PlanetSize;
+        chunkSize = entry.ChunkSize > 0 ? entry.ChunkSize : DefaultChunkSize;
+        mapLoaded = true;
+        cameraPositioned = false;
+        activeMapId = entry.MapId;
+        activeCacheEntry = entry;
+        activeCameraOverride = GetCameraOverrideFor(entry.MapId);
+    }
+
+    private void SyncCameraOverrideKeys(string aliasKey, string canonicalKey)
+    {
+        if (string.IsNullOrWhiteSpace(aliasKey) || string.IsNullOrWhiteSpace(canonicalKey))
+        {
+            return;
+        }
+
+        string alias = aliasKey.Trim();
+        string canonical = canonicalKey.Trim();
+        if (string.Equals(alias, canonical, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (cameraOverrides.TryGetValue(alias, out var overrideData))
+        {
+            cameraOverrides[canonical] = overrideData;
+            if (mapCache.TryGetValue(canonical, out var cached))
+            {
+                cached.CameraStart = overrideData;
+            }
+        }
+        else if (cameraOverrides.TryGetValue(canonical, out var existing))
+        {
+            cameraOverrides[alias] = existing;
+        }
+    }
+
+    private class MapCacheEntry
+    {
+        public string MapId;
+        public string MapName;
+        public string BaseTilePath;
+        public TileBase CachedBaseTile;
+        public int PlanetSize;
+        public int ChunkSize = DefaultChunkSize;
+        public Dictionary<Vector2Int, TileVisualData> OverrideTiles = new Dictionary<Vector2Int, TileVisualData>();
+        public Dictionary<string, TileBase> TileCache = new Dictionary<string, TileBase>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, GameObject> ObjectCache = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        public CameraOverride? CameraStart;
+    }
+
     private class TileVisualData
     {
         public string SurfaceTilePath;
@@ -933,6 +1291,18 @@ public class RenderMapTilesController : MonoBehaviour
         public string ObjectPath;
         public bool HasOverlayTransform;
         public Matrix4x4 OverlayTransform;
+
+        public TileVisualData Clone()
+        {
+            return new TileVisualData
+            {
+                SurfaceTilePath = SurfaceTilePath,
+                OverlayTilePath = OverlayTilePath,
+                ObjectPath = ObjectPath,
+                HasOverlayTransform = HasOverlayTransform,
+                OverlayTransform = OverlayTransform
+            };
+        }
     }
 
     private class ActiveTileObject
@@ -971,6 +1341,9 @@ public class RenderMapTilesController : MonoBehaviour
 
         [FirestoreProperty]
         public int PlanetSize { get; set; }
+
+        [FirestoreProperty]
+        public string PlanetName { get; set; }
     }
 
     [FirestoreData]

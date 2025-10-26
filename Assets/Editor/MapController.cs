@@ -20,6 +20,7 @@ using System.Threading.Tasks;
 using Auth;
 using DB;
 using System.IO;
+using System.Globalization;
 
 internal static class MapControllerJson
 {
@@ -427,7 +428,12 @@ public class Map {
 
             EditorUtility.DisplayProgressBar("Load Map", "Resolving cleared tiles...", 0.55f);
             var tilesToApply = new List<_Tile>();
-        if (mapData != null)
+        var directTiles = ExtractTilesFromSnapshot(MapDataSnapshot).ToList();
+        if (directTiles.Count > 0)
+        {
+            tilesToApply.AddRange(NormalizeStoredTiles(directTiles));
+        }
+        else if (mapData != null)
         {
             if (mapData.Tiles != null && mapData.Tiles.Count > 0)
             {
@@ -437,16 +443,27 @@ public class Map {
             {
                 var mapDataRef = DB.Default.MapData.Document(Id);
                 var chunkCollection = mapDataRef.Collection("Chunks");
-                    var chunkTasks = new List<Task<DocumentSnapshot>>();
-                    foreach (var chunkId in mapData.ChunkIds)
+                var chunkTasks = new List<Task<DocumentSnapshot>>();
+                foreach (var chunkId in mapData.ChunkIds)
+                {
+                    chunkTasks.Add(chunkCollection.Document(chunkId).GetSnapshotAsync());
+                }
+
+                var chunkSnapshots = await Task.WhenAll(chunkTasks);
+                foreach (var chunkSnapshot in chunkSnapshots)
+                {
+                    if (!chunkSnapshot.Exists)
                     {
-                        chunkTasks.Add(chunkCollection.Document(chunkId).GetSnapshotAsync());
+                        continue;
                     }
 
-                    var chunkSnapshots = await Task.WhenAll(chunkTasks);
-                    foreach (var chunkSnapshot in chunkSnapshots)
+                    var chunkTiles = ExtractTilesFromSnapshot(chunkSnapshot).ToList();
+                    if (chunkTiles.Count > 0)
                     {
-                    if (!chunkSnapshot.Exists) continue;
+                        tilesToApply.AddRange(NormalizeStoredTiles(chunkTiles));
+                        continue;
+                    }
+
                     var chunk = chunkSnapshot.ConvertTo<MapChunk>();
                     if (chunk?.Tiles != null)
                     {
@@ -982,6 +999,234 @@ public class Map {
         }
 
         return null;
+    }
+
+    private static IEnumerable<_Tile> ExtractTilesFromSnapshot(DocumentSnapshot snapshot)
+    {
+        if (snapshot == null || !snapshot.Exists)
+        {
+            yield break;
+        }
+
+        var data = snapshot.ToDictionary();
+        if (data == null || data.Count == 0)
+        {
+            yield break;
+        }
+
+        if (!TryGetTilesCollection(data, out var tilesCollection))
+        {
+            yield break;
+        }
+
+        foreach (var entry in tilesCollection)
+        {
+            if (entry is IDictionary dictionary)
+            {
+                var tile = DeserializeTile(dictionary);
+                if (tile != null)
+                {
+                    yield return tile;
+                }
+            }
+        }
+    }
+
+    private static bool TryGetTilesCollection(IReadOnlyDictionary<string, object> data, out IEnumerable tiles)
+    {
+        tiles = null;
+        if (data == null)
+        {
+            return false;
+        }
+
+        if (data.TryGetValue("Tiles", out var value) || data.TryGetValue("tiles", out value))
+        {
+            if (value is IEnumerable enumerable)
+            {
+                tiles = enumerable;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static _Tile DeserializeTile(IDictionary raw)
+    {
+        if (raw == null)
+        {
+            return null;
+        }
+
+        var tile = new _Tile
+        {
+            TileName = ExtractString(raw, "TileName", "tileName"),
+            TileObjectPath = ExtractString(raw, "TileObjectPath", "tileObjectPath"),
+            TileLayer = ExtractString(raw, "TileLayer", "tileLayer"),
+            Transform = ExtractTransform(raw),
+            x = ExtractInt(raw, "x", "X") ?? 0,
+            y = ExtractInt(raw, "y", "Y") ?? 0
+        };
+
+        if (string.IsNullOrEmpty(tile.TileLayer))
+        {
+            tile.TileLayer = MapTileLayers.Overlay;
+        }
+
+        return tile;
+    }
+
+    private static string ExtractString(IDictionary data, params string[] keys)
+    {
+        foreach (string key in keys)
+        {
+            if (key == null)
+            {
+                continue;
+            }
+
+            if (data.Contains(key))
+            {
+                object value = data[key];
+                if (value is string s)
+                {
+                    return s;
+                }
+
+                if (value != null)
+                {
+                    return value.ToString();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static int? ExtractInt(IDictionary data, params string[] keys)
+    {
+        foreach (string key in keys)
+        {
+            if (key == null)
+            {
+                continue;
+            }
+
+            if (!data.Contains(key))
+            {
+                continue;
+            }
+
+            object value = data[key];
+            if (value == null)
+            {
+                continue;
+            }
+
+            switch (value)
+            {
+                case int i:
+                    return i;
+                case long l:
+                    return (int)l;
+                case double d when !double.IsNaN(d) && !double.IsInfinity(d):
+                    return (int)Math.Round(d);
+                case float f when !float.IsNaN(f) && !float.IsInfinity(f):
+                    return (int)Math.Round(f);
+                case decimal m:
+                    return (int)Math.Round(m);
+                case string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed):
+                    return (int)Math.Round(parsed);
+            }
+        }
+
+        return null;
+    }
+
+    private static List<double> ExtractTransform(IDictionary data)
+    {
+        foreach (string key in new[] { "Transform", "transform" })
+        {
+            if (key == null || !data.Contains(key))
+            {
+                continue;
+            }
+
+            object value = data[key];
+            var list = NormalizeNumericList(value);
+            if (list != null && list.Count > 0)
+            {
+                return list;
+            }
+        }
+
+        return null;
+    }
+
+    private static List<double> NormalizeNumericList(object value)
+    {
+        if (value is not IEnumerable enumerable)
+        {
+            return null;
+        }
+
+        var result = new List<double>();
+        foreach (object item in enumerable)
+        {
+            if (TryConvertToDouble(item, out double number))
+            {
+                result.Add(number);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryConvertToDouble(object value, out double number)
+    {
+        number = 0d;
+        switch (value)
+        {
+            case null:
+                return false;
+            case double d when !double.IsNaN(d) && !double.IsInfinity(d):
+                number = d;
+                return true;
+            case float f when !float.IsNaN(f) && !float.IsInfinity(f):
+                number = f;
+                return true;
+            case long l:
+                number = l;
+                return true;
+            case int i:
+                number = i;
+                return true;
+            case short s:
+                number = s;
+                return true;
+            case byte b:
+                number = b;
+                return true;
+            case decimal m:
+                number = (double)m;
+                return true;
+            case string str when double.TryParse(str, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed):
+                number = parsed;
+                return true;
+            case IConvertible convertible when convertible.GetTypeCode() != TypeCode.Boolean:
+                try
+                {
+                    number = convertible.ToDouble(CultureInfo.InvariantCulture);
+                    return !double.IsNaN(number) && !double.IsInfinity(number);
+                }
+                catch
+                {
+                    return false;
+                }
+        }
+
+        return false;
     }
 
     private static TileBase LoadTileFromResources(string resourceName)

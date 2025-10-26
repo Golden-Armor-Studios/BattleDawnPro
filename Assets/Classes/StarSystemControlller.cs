@@ -35,6 +35,18 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
     [SerializeField]
     private string warpToMapName;
 
+    [Header("Camera Override")]
+    [Tooltip("If enabled, sets the camera position and size when the warp finishes.")]
+    [SerializeField]
+    private bool overrideCameraStart;
+
+    [SerializeField]
+    private Vector3 cameraStartPosition = new Vector3(0f, 0f, 0f);
+
+    [SerializeField]
+    [Min(0.01f)]
+    private float cameraStartSize = 4.72f;
+
     private const string WarpVideoPlayerObjectName = "WarpTravelVideoPlayer";
 
     private static VideoPlayer warpVideoPlayer;
@@ -42,6 +54,10 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
     private static GameObject warpVideoPlayerObject;
     private static StarSystemControlller warpVideoOwner;
     private static bool warpVideoPlaying;
+    private static RenderMapTilesController cachedWarpController;
+    private static Task<bool> pendingWarpLoadTask;
+    private static string pendingWarpMapName;
+    private static bool mapHiddenForVideo;
 
     public UnityEvent OnClicked => onClicked;
 
@@ -98,6 +114,14 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
 
         bool startedVideo = playWarpTravelVideo && PlayWarpTravelVideo();
 
+        BeginWarpLoadIfNeeded(warpToMapName);
+
+        if (startedVideo && cachedWarpController != null)
+        {
+            cachedWarpController.SetMapVisibility(false);
+            mapHiddenForVideo = true;
+        }
+
         Debug.Log(string.IsNullOrEmpty(systemName)
             ? $"Star system clicked: {gameObject.name}"
             : $"Star system clicked: {systemName}");
@@ -106,7 +130,7 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
 
         if (!startedVideo)
         {
-            WarpToDestinationIfConfigured();
+            _ = WarpToDestinationIfConfiguredAsync();
         }
     }
 
@@ -197,8 +221,6 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
         {
             yield return null;
         }
-
-        StopWarpTravelVideo();
     }
 
     private void StopWarpTravelVideo()
@@ -336,53 +358,117 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
         warpVideoOwner = null;
     }
 
-    private void OnWarpVideoError(VideoPlayer source, string message)
+    private async void OnWarpVideoError(VideoPlayer source, string message)
     {
         Debug.LogError($"Warp travel video error on {gameObject.name}: {message}");
         StopWarpTravelVideo();
-        WarpToDestinationIfConfigured();
+        await WarpToDestinationIfConfiguredAsync();
     }
 
-    private void OnWarpVideoFinished(VideoPlayer source)
+    private async void OnWarpVideoFinished(VideoPlayer source)
     {
+        await WarpToDestinationIfConfiguredAsync();
         StopWarpTravelVideo();
-        WarpToDestinationIfConfigured();
     }
 
-    private void WarpToDestinationIfConfigured()
+    private Task<bool> BeginWarpLoadIfNeeded(string mapName)
+    {
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            return null;
+        }
+
+        string trimmedName = mapName.Trim();
+
+        if (pendingWarpLoadTask != null)
+        {
+            bool sameMap = string.Equals(pendingWarpMapName, trimmedName, StringComparison.OrdinalIgnoreCase);
+            if (!pendingWarpLoadTask.IsCompleted)
+            {
+                if (sameMap)
+                {
+                    return pendingWarpLoadTask;
+                }
+            }
+            else if (sameMap)
+            {
+                return pendingWarpLoadTask;
+            }
+        }
+
+        if (cachedWarpController == null)
+        {
+            cachedWarpController = FindObjectOfType<RenderMapTilesController>();
+            if (cachedWarpController == null)
+            {
+                Debug.LogWarning($"Warp target '{trimmedName}' requested but no {nameof(RenderMapTilesController)} is active in the scene.");
+                pendingWarpLoadTask = null;
+                pendingWarpMapName = null;
+                return null;
+            }
+        }
+
+        if (overrideCameraStart)
+        {
+            Vector3 desiredPosition = cameraStartPosition;
+            cachedWarpController.SetMapCameraOverride(trimmedName, desiredPosition, cameraStartSize);
+        }
+        else
+        {
+            cachedWarpController.ClearMapCameraOverride(trimmedName);
+        }
+
+        pendingWarpMapName = trimmedName;
+        pendingWarpLoadTask = cachedWarpController.LoadMapByNameAsync(trimmedName);
+        return pendingWarpLoadTask;
+    }
+
+    private async Task<bool> EnsureWarpMapReadyAsync(string mapName)
+    {
+        Task<bool> loadTask = BeginWarpLoadIfNeeded(mapName);
+        if (loadTask == null)
+        {
+            cachedWarpController?.SetMapVisibility(true);
+            return false;
+        }
+
+        try
+        {
+            bool loaded = await loadTask;
+            return loaded;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error while loading warp destination '{mapName}': {ex}");
+            return false;
+        }
+        finally
+        {
+            if (ReferenceEquals(loadTask, pendingWarpLoadTask))
+            {
+                pendingWarpLoadTask = null;
+                pendingWarpMapName = null;
+            }
+
+            cachedWarpController?.SetMapVisibility(true);
+        }
+    }
+
+    private async Task WarpToDestinationIfConfiguredAsync()
     {
         if (string.IsNullOrWhiteSpace(warpToMapName))
         {
             return;
         }
 
-        WarpToMapAsync(warpToMapName.Trim());
-    }
-
-    private async void WarpToMapAsync(string mapName)
-    {
-        try
+        string mapName = warpToMapName.Trim();
+        bool loaded = await EnsureWarpMapReadyAsync(mapName);
+        if (!loaded)
         {
-            var controller = FindObjectOfType<RenderMapTilesController>();
-            if (controller == null)
-            {
-                Debug.LogWarning($"Warp target '{mapName}' requested but no {nameof(RenderMapTilesController)} is active in the scene.");
-                return;
-            }
+            Debug.LogWarning($"Warp target '{mapName}' could not be loaded from Firestore.");
+            return;
+        }
 
-            bool loaded = await controller.LoadMapByNameAsync(mapName);
-            if (!loaded)
-            {
-                Debug.LogWarning($"Warp target '{mapName}' could not be loaded from Firestore.");
-            }
-            else
-            {
-                Debug.Log($"Warped to map '{mapName}'.");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Error warping to map '{mapName}': {ex}");
-        }
+        Debug.Log($"Warped to map '{mapName}'.");
     }
 }
