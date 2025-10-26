@@ -59,6 +59,15 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
     private static string pendingWarpMapName;
     private static bool mapHiddenForVideo;
 
+    private static RenderMapTilesController GetMapController()
+    {
+        if (cachedWarpController == null)
+        {
+            cachedWarpController = UnityEngine.Object.FindObjectOfType<RenderMapTilesController>();
+        }
+        return cachedWarpController;
+    }
+
     public UnityEvent OnClicked => onClicked;
 
     private void Reset()
@@ -112,13 +121,16 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
             return;
         }
 
+        cachedWarpController = GetMapController();
+
         bool startedVideo = playWarpTravelVideo && PlayWarpTravelVideo();
 
         BeginWarpLoadIfNeeded(warpToMapName);
 
-        if (startedVideo && cachedWarpController != null)
+        var controllerForHide = GetMapController();
+        if (startedVideo && controllerForHide != null)
         {
-            cachedWarpController.SetMapVisibility(false);
+            controllerForHide.SetMapVisibility(false);
             mapHiddenForVideo = true;
         }
 
@@ -249,6 +261,12 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
         warpVideoPlayer.time = 0d;
         warpVideoPlaying = false;
         UnhookVideoPlayerEvents();
+
+        if (mapHiddenForVideo)
+        {
+            GetMapController()?.SetMapVisibility(true);
+            mapHiddenForVideo = false;
+        }
     }
 
     private void EnsureVideoPlayer()
@@ -396,30 +414,28 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
             }
         }
 
-        if (cachedWarpController == null)
+        var controller = GetMapController();
+        if (controller == null)
         {
-            cachedWarpController = FindObjectOfType<RenderMapTilesController>();
-            if (cachedWarpController == null)
-            {
-                Debug.LogWarning($"Warp target '{trimmedName}' requested but no {nameof(RenderMapTilesController)} is active in the scene.");
-                pendingWarpLoadTask = null;
-                pendingWarpMapName = null;
-                return null;
-            }
+            Debug.LogWarning($"Warp target '{trimmedName}' requested but no {nameof(RenderMapTilesController)} is active in the scene.");
+            pendingWarpLoadTask = null;
+            pendingWarpMapName = null;
+            return null;
         }
 
         if (overrideCameraStart)
         {
             Vector3 desiredPosition = cameraStartPosition;
-            cachedWarpController.SetMapCameraOverride(trimmedName, desiredPosition, cameraStartSize);
+            controller.SetMapCameraOverride(trimmedName, desiredPosition, cameraStartSize);
         }
         else
         {
-            cachedWarpController.ClearMapCameraOverride(trimmedName);
+            controller.ClearMapCameraOverride(trimmedName);
         }
 
         pendingWarpMapName = trimmedName;
-        pendingWarpLoadTask = cachedWarpController.LoadMapByNameAsync(trimmedName);
+        cachedWarpController = controller;
+        pendingWarpLoadTask = controller.LoadMapByNameAsync(trimmedName);
         return pendingWarpLoadTask;
     }
 
@@ -428,18 +444,32 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
         Task<bool> loadTask = BeginWarpLoadIfNeeded(mapName);
         if (loadTask == null)
         {
-            cachedWarpController?.SetMapVisibility(true);
+            if (mapHiddenForVideo)
+            {
+                GetMapController()?.SetMapVisibility(true);
+                mapHiddenForVideo = false;
+            }
             return false;
         }
 
         try
         {
             bool loaded = await loadTask;
+            if (!loaded && mapHiddenForVideo)
+            {
+                GetMapController()?.SetMapVisibility(true);
+                mapHiddenForVideo = false;
+            }
             return loaded;
         }
         catch (Exception ex)
         {
             Debug.LogError($"Error while loading warp destination '{mapName}': {ex}");
+            if (mapHiddenForVideo)
+            {
+                GetMapController()?.SetMapVisibility(true);
+                mapHiddenForVideo = false;
+            }
             return false;
         }
         finally
@@ -449,8 +479,6 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
                 pendingWarpLoadTask = null;
                 pendingWarpMapName = null;
             }
-
-            cachedWarpController?.SetMapVisibility(true);
         }
     }
 
@@ -467,6 +495,12 @@ public class StarSystemControlller : MonoBehaviour, IPointerClickHandler
         {
             Debug.LogWarning($"Warp target '{mapName}' could not be loaded from Firestore.");
             return;
+        }
+
+        if (mapHiddenForVideo)
+        {
+            GetMapController()?.SetMapVisibility(true);
+            mapHiddenForVideo = false;
         }
 
         Debug.Log($"Warped to map '{mapName}'.");

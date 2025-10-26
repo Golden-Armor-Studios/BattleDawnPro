@@ -229,9 +229,15 @@ public class RenderMapTilesController : MonoBehaviour
                     chunkSize = Mathf.Max(1, mapData.ChunkSize);
                     if (mapData.Tiles != null && mapData.Tiles.Count > 0)
                     {
+                        int processed = 0;
                         foreach (var tile in mapData.Tiles)
                         {
                             UpsertTileVisualData(tile);
+                            processed++;
+                            if (processed % 1000 == 0)
+                            {
+                                await Task.Yield();
+                            }
                         }
                     }
                     else if (mapData.ChunkIds != null && mapData.ChunkIds.Count > 0)
@@ -339,19 +345,22 @@ public class RenderMapTilesController : MonoBehaviour
     {
         EnsureTileInfrastructure();
 
-        if (grid != null)
-        {
-            grid.enabled = visible;
-        }
-
         if (surfaceTilemap != null)
         {
-            surfaceTilemap.gameObject.SetActive(visible);
+            var renderer = surfaceTilemap.GetComponent<TilemapRenderer>();
+            if (renderer != null)
+            {
+                renderer.enabled = visible;
+            }
         }
 
         if (overlayTilemap != null)
         {
-            overlayTilemap.gameObject.SetActive(visible);
+            var renderer = overlayTilemap.GetComponent<TilemapRenderer>();
+            if (renderer != null)
+            {
+                renderer.enabled = visible;
+            }
         }
 
         foreach (var kvp in activeTileObjects)
@@ -488,6 +497,7 @@ public class RenderMapTilesController : MonoBehaviour
         }
 
         var snapshots = await Task.WhenAll(chunkTasks);
+        int chunksProcessed = 0;
         foreach (var snapshot in snapshots)
         {
             if (!snapshot.Exists)
@@ -501,9 +511,21 @@ public class RenderMapTilesController : MonoBehaviour
                 continue;
             }
 
+            int tilesProcessed = 0;
             foreach (var tile in chunk.Tiles)
             {
                 UpsertTileVisualData(tile);
+                tilesProcessed++;
+                if (tilesProcessed % 1000 == 0)
+                {
+                    await Task.Yield();
+                }
+            }
+
+            chunksProcessed++;
+            if (chunksProcessed % 8 == 0)
+            {
+                await Task.Yield();
             }
         }
     }
